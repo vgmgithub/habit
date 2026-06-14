@@ -1026,3 +1026,6 @@ select.field { -webkit-appearance: none; appearance: none; background-image: lin
 .lb-pill { flex: 1; text-align: center; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 6px; }
 .lb-pill-v { font-size: 1.15rem; font-weight: 800; }
 .lb-pill-l { font-size: 0.72rem; color: var(--text-faint); margin-top: 2px; }
+
+.lb-qr-container { display: flex; justify-content: center; align-items: center; padding: 16px; background: var(--card-2); border-radius: var(--radius-sm); }
+.lb-qr-container canvas { border: 2px solid var(--border); border-radius: var(--radius-sm); background: white; }

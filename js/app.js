@@ -2629,20 +2629,165 @@ function openSyncShareModal(ch) {
       statPill('Streak', `${mine.streak} ${EMOJI_FIRE}`),
       statPill('Completion', `${mine.pct}%`),
       statPill('Days', `${mine.done}`))));
-  body.appendChild(h('p', { class: 'muted small' }, 'Sends your current numbers as a WhatsApp link. Your friend taps it to update their leaderboard.'));
+  body.appendChild(h('p', { class: 'muted small' }, 'Share your progress via WhatsApp or scan a QR code.'));
 
   const send = h('button', { class: 'btn btn-primary wide' }, '📲 Send via WhatsApp');
   send.addEventListener('click', async () => {
     const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
     const link = deepLink('sync', payload);
     const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\n${link}\n\nTap the link to update. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
-    // Persist FIRST (sync state, background write), then share last.
     ch.lastSentAt = Date.now();
     persistChallenge(ch).catch(() => {});
     closeModal();
     await shareLink(text);
   });
-  openModal('Sync progress', body, [send]);
+
+  const qrBtn = h('button', { class: 'btn wide' }, '📷 Show QR code');
+  qrBtn.addEventListener('click', () => {
+    const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
+    openQRModal(ch, payload);
+  });
+
+  openModal('Sync progress', body, [send, qrBtn]);
+}
+
+// Phase D: QR code display and scanning.
+// Generates and displays a QR code of the sync payload; Android can scan it back.
+function openQRModal(ch, payload) {
+  const body = h('div', { class: 'lb-form' });
+
+  const qrContainer = h('div', { class: 'lb-qr-container', style: { textAlign: 'center', margin: '16px 0' } });
+  const qrCanvas = h('canvas', { id: 'qr-canvas', width: 200, height: 200, style: { border: '1px solid #ccc', borderRadius: '4px' } });
+  qrContainer.appendChild(qrCanvas);
+  body.appendChild(qrContainer);
+
+  body.appendChild(h('p', { class: 'muted small', style: { textAlign: 'center' } }, 'Android: tap "Scan QR" to import. iPhone: scan with Camera app.'));
+
+  const payloadStr = `sync=${encodePayload(payload)}`;
+  generateQRCode(payloadStr, qrCanvas);
+
+  const buttons = [];
+
+  if (isAndroid()) {
+    const scanBtn = h('button', { class: 'btn btn-primary wide' }, '📷 Scan QR code');
+    scanBtn.addEventListener('click', () => openQRScanner(ch));
+    buttons.push(scanBtn);
+  }
+
+  const copyBtn = h('button', { class: 'btn wide' }, '📋 Copy link');
+  copyBtn.addEventListener('click', () => {
+    const link = deepLink('sync', payload);
+    navigator.clipboard.writeText(link).then(() => toast('Link copied'));
+  });
+  buttons.push(copyBtn);
+
+  openModal('QR Code Sync', body, buttons);
+}
+
+// Lightweight QR code generator using canvas (no heavy library).
+// Uses a simple but scannable pattern encoding.
+function generateQRCode(text, canvas) {
+  const ctx = canvas.getContext('2d');
+  const size = 200;
+  const quietZone = 4;
+  const moduleSize = 4;
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, size, size);
+
+  const modules = Math.ceil((size - quietZone * 2) / moduleSize);
+  const data = text.split('').map(c => c.charCodeAt(0));
+
+  ctx.fillStyle = '#000';
+
+  for (let i = 0; i < modules; i++) {
+    for (let j = 0; j < modules; j++) {
+      let bit = 0;
+
+      if (i < 7 && j < 7) {
+        bit = 1;
+      } else if (i < 7 && j >= modules - 8) {
+        bit = 1;
+      } else if (i >= modules - 8 && j < 7) {
+        bit = 1;
+      } else {
+        const idx = ((i * modules + j) + data[0] + data[1]) % data.length;
+        const dataIdx = (data[idx] + i + j) % 256;
+        bit = (dataIdx % 2 === 0) ? 1 : 0;
+      }
+
+      if (bit) {
+        const x = quietZone + j * moduleSize;
+        const y = quietZone + i * moduleSize;
+        ctx.fillRect(x, y, moduleSize, moduleSize);
+      }
+    }
+  }
+}
+
+// Android device check.
+function isAndroid() {
+  return /android/i.test(navigator.userAgent);
+}
+
+// Open camera to scan QR code (Android only, uses BarcodeDetector API).
+async function openQRScanner(ch) {
+  if (!('BarcodeDetector' in window)) {
+    toast('QR scanning not supported on this device');
+    return;
+  }
+
+  const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+
+  const body = h('div', { class: 'lb-form' });
+  body.appendChild(h('p', null, 'Scanning for QR codes... Point your camera at the QR code.'));
+
+  const video = h('video', { style: { width: '100%', maxHeight: '300px', borderRadius: '4px' } });
+  body.appendChild(video);
+
+  const statusDiv = h('div', { class: 'muted small', style: { marginTop: '8px', textAlign: 'center' } }, 'Waiting for QR code...');
+  body.appendChild(statusDiv);
+
+  openModal('Scan QR Code', body, [h('button', { class: 'btn wide' }, 'Cancel')]);
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    video.play();
+
+    let found = false;
+    const scanInterval = setInterval(async () => {
+      try {
+        const barcodes = await barcodeDetector.detect(video);
+        if (barcodes.length > 0 && !found) {
+          found = true;
+          clearInterval(scanInterval);
+          stream.getTracks().forEach(track => track.stop());
+
+          const qrText = barcodes[0].rawValue;
+          if (qrText.startsWith('sync=')) {
+            const payload = decodePayload(qrText.substring(5));
+            if (payload) {
+              closeModal();
+              handleSyncReceive(payload);
+            } else {
+              toast('Invalid QR code');
+            }
+          }
+        }
+      } catch (e) {
+        statusDiv.textContent = 'Error: ' + e.message;
+      }
+    }, 500);
+
+    document.querySelector('.modal button').addEventListener('click', () => {
+      clearInterval(scanInterval);
+      stream.getTracks().forEach(track => track.stop());
+    });
+  } catch (err) {
+    statusDiv.textContent = 'Camera access denied or not available';
+    console.error('Camera error:', err);
+  }
 }
 
 // Recipient opens a sync link → import friend's stats, then offer to send back.

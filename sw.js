@@ -3,7 +3,7 @@
 // network fallback that refreshes the cache. All habit DATA lives in IndexedDB
 // (handled by the page), so the SW only needs to cache the static shell.
 
-const CACHE = 'habits-v44';
+const CACHE = 'habits-v45';
 const ASSETS = [
   './',
   './index.html',

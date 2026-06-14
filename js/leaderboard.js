@@ -395,3 +395,16 @@ export function syncHealthStatus(lastSyncedAt, now = Date.now()) {
   if (days <= 7) return { status: 'yellow', label: `${days}d ago` };
   return { status: 'red', label: `${days}d ago` };
 }
+
+// ---------------------------------------------------------------------------
+// Phase D: QR Code sync (offline-first, no external libs)
+// ---------------------------------------------------------------------------
+
+// Generate a deep link from a sync payload. This link can be turned into a QR
+// code and scanned on another device, or shared as text.
+export function syncLinkForQR(challengeId, streak, pct, days, ts) {
+  const payload = buildSync({ challengeId, streak, pct, days, ts });
+  // Return the full deep link (caller will convert to QR or display as text)
+  // Note: the deep link format is defined in app.js's deepLink() helper
+  return 'sync=' + encodePayload(payload);
+}

@@ -2719,14 +2719,20 @@ function openQRModal(ch, payload) {
   const body = h('div', { class: 'lb-form' });
 
   const qrContainer = h('div', { class: 'lb-qr-container', style: { textAlign: 'center', margin: '16px 0' } });
-  const qrCanvas = h('canvas', { id: 'qr-canvas', width: 200, height: 200, style: { border: '1px solid #ccc', borderRadius: '4px' } });
+  const qrCanvas = h('canvas', { id: 'qr-canvas', width: 240, height: 240 });
   qrContainer.appendChild(qrCanvas);
   body.appendChild(qrContainer);
 
-  body.appendChild(h('p', { class: 'muted small', style: { textAlign: 'center' } }, 'Android: tap "Scan QR" to import. iPhone: scan with Camera app.'));
+  // Encode the FULL deep link so iPhone's Camera app can open it directly.
+  const link = deepLink('sync', payload);
+  const ok = generateQRCode(link, qrCanvas);
+  if (!ok) {
+    qrContainer.appendChild(h('p', { class: 'muted small' }, 'QR unavailable — use Copy link instead.'));
+  }
 
-  const payloadStr = `sync=${encodePayload(payload)}`;
-  generateQRCode(payloadStr, qrCanvas);
+  body.appendChild(h('p', { class: 'muted small', style: { textAlign: 'center' } },
+    isAndroid() ? 'Tap "Scan QR code" to import a friend’s code, or let them scan this one.'
+                : 'Scan with your iPhone Camera app, or use Copy link.'));
 
   const buttons = [];
 
@@ -2746,45 +2752,42 @@ function openQRModal(ch, payload) {
   openModal('QR Code Sync', body, buttons);
 }
 
-// Lightweight QR code generator using canvas (no heavy library).
-// Uses a simple but scannable pattern encoding.
+// Real QR code generation onto a canvas using the bundled qrcode-generator
+// library (window.qrcode, MIT). Returns true on success, false if the library
+// is unavailable. Auto-selects the QR version (typeNumber 0) for the data and
+// uses error-correction level 'M' (good balance for phone-camera scanning).
 function generateQRCode(text, canvas) {
+  if (typeof window.qrcode !== 'function') return false;
+  let qr;
+  try {
+    qr = window.qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+  } catch (e) {
+    return false;
+  }
+
   const ctx = canvas.getContext('2d');
-  const size = 200;
-  const quietZone = 4;
-  const moduleSize = 4;
+  const size = canvas.width;
+  const count = qr.getModuleCount();
+  const quiet = 2; // modules of white border so scanners lock on
+  const cell = size / (count + quiet * 2);
 
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, size, size);
-
-  const modules = Math.ceil((size - quietZone * 2) / moduleSize);
-  const data = text.split('').map(c => c.charCodeAt(0));
-
   ctx.fillStyle = '#000';
-
-  for (let i = 0; i < modules; i++) {
-    for (let j = 0; j < modules; j++) {
-      let bit = 0;
-
-      if (i < 7 && j < 7) {
-        bit = 1;
-      } else if (i < 7 && j >= modules - 8) {
-        bit = 1;
-      } else if (i >= modules - 8 && j < 7) {
-        bit = 1;
-      } else {
-        const idx = ((i * modules + j) + data[0] + data[1]) % data.length;
-        const dataIdx = (data[idx] + i + j) % 256;
-        bit = (dataIdx % 2 === 0) ? 1 : 0;
-      }
-
-      if (bit) {
-        const x = quietZone + j * moduleSize;
-        const y = quietZone + i * moduleSize;
-        ctx.fillRect(x, y, moduleSize, moduleSize);
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (qr.isDark(r, c)) {
+        // Round to whole pixels + overdraw 1px to avoid hairline gaps.
+        const x = Math.round((c + quiet) * cell);
+        const y = Math.round((r + quiet) * cell);
+        const w = Math.ceil(cell) + 1;
+        ctx.fillRect(x, y, w, w);
       }
     }
   }
+  return true;
 }
 
 // Android device check.
@@ -2795,60 +2798,60 @@ function isAndroid() {
 // Open camera to scan QR code (Android only, uses BarcodeDetector API).
 async function openQRScanner(ch) {
   if (!('BarcodeDetector' in window)) {
-    toast('QR scanning not supported on this device');
+    toast('QR scanning not supported on this device — use "I have a code" to paste instead');
     return;
   }
 
   const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
 
   const body = h('div', { class: 'lb-form' });
-  body.appendChild(h('p', null, 'Scanning for QR codes... Point your camera at the QR code.'));
-
-  const video = h('video', { style: { width: '100%', maxHeight: '300px', borderRadius: '4px' } });
+  body.appendChild(h('p', { class: 'muted small' }, 'Point your camera at your friend’s Habits QR code.'));
+  const video = h('video', { playsinline: true, style: { width: '100%', maxHeight: '320px', borderRadius: '8px', background: '#000' } });
   body.appendChild(video);
-
-  const statusDiv = h('div', { class: 'muted small', style: { marginTop: '8px', textAlign: 'center' } }, 'Waiting for QR code...');
+  const statusDiv = h('div', { class: 'muted small', style: { marginTop: '8px', textAlign: 'center' } }, 'Starting camera…');
   body.appendChild(statusDiv);
 
-  openModal('Scan QR Code', body, [h('button', { class: 'btn wide' }, 'Cancel')]);
+  // Shared cleanup: stop the scan loop AND release the camera. Runs on any close
+  // (Cancel button, X, backdrop tap) via openModal's onClose, and on success.
+  let stream = null;
+  let scanInterval = null;
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (scanInterval) clearInterval(scanInterval);
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+  };
+
+  const cancelBtn = h('button', { class: 'btn wide' }, 'Cancel');
+  cancelBtn.addEventListener('click', closeModal);
+  openModal('Scan QR code', body, [cancelBtn], cleanup);
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     video.srcObject = stream;
-    video.play();
+    await video.play();
+    statusDiv.textContent = 'Searching for a QR code…';
 
     let found = false;
-    const scanInterval = setInterval(async () => {
+    scanInterval = setInterval(async () => {
+      if (found) return;
       try {
         const barcodes = await barcodeDetector.detect(video);
-        if (barcodes.length > 0 && !found) {
-          found = true;
-          clearInterval(scanInterval);
-          stream.getTracks().forEach(track => track.stop());
-
-          const qrText = barcodes[0].rawValue;
-          if (qrText.startsWith('sync=')) {
-            const payload = decodePayload(qrText.substring(5));
-            if (payload) {
-              closeModal();
-              handleSyncReceive(payload);
-            } else {
-              toast('Invalid QR code');
-            }
-          }
-        }
-      } catch (e) {
-        statusDiv.textContent = 'Error: ' + e.message;
-      }
-    }, 500);
-
-    document.querySelector('.modal button').addEventListener('click', () => {
-      clearInterval(scanInterval);
-      stream.getTracks().forEach(track => track.stop());
-    });
+        if (!barcodes.length) return;
+        found = true;
+        const qrText = barcodes[0].rawValue;
+        // Reuse the same robust pipeline as pasted codes / deep links:
+        // handles a full URL or a bare payload, and any type (invite/accept/sync).
+        const payload = LB.decodePayload(extractPayloadString(qrText));
+        cleanup();
+        closeModal();
+        if (payload) routeLeaderboardPayload(payload);
+        else toast('That QR code is not a Habits code');
+      } catch (_) { /* transient detect errors between frames — ignore */ }
+    }, 400);
   } catch (err) {
-    statusDiv.textContent = 'Camera access denied or not available';
-    console.error('Camera error:', err);
+    statusDiv.textContent = 'Camera access denied or unavailable. Use "I have a code" to paste instead.';
   }
 }
 

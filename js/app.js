@@ -3310,10 +3310,15 @@ async function boot() {
     }
   } catch (_) {}
 
-  // When user triggers skip-wait, page reloads via this handler (only once per session)
+  // Auto-reload when a NEW service worker takes control (after a deploy), so the
+  // page picks up the fresh JS/CSS. The SW now skipWaiting()s + claims on its
+  // own, so this fires automatically — no manual "update" tap needed.
+  // Skip the very first claim on a brand-new install (no prior controller):
+  // there's nothing stale to refresh then.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    if (reloaded || !hadController) return;
     reloaded = true;
     window.location.reload();
   });

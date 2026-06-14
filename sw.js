@@ -3,7 +3,7 @@
 // network fallback that refreshes the cache. All habit DATA lives in IndexedDB
 // (handled by the page), so the SW only needs to cache the static shell.
 
-const CACHE = 'habits-v40';
+const CACHE = 'habits-v41';
 const ASSETS = [
   './',
   './index.html',
@@ -30,9 +30,15 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
+  // Activate immediately so a fresh deploy reaches INSTALLED PWAs on the next
+  // launch — no "update available" button to hunt for. Pairs with
+  // clients.claim() below and the page's controllerchange→reload handler so the
+  // app silently refreshes onto the new code. (Previously this stayed waiting,
+  // which froze installed PWAs on stale JS — the cause of "works in the browser
+  // / incognito but not in the PWA".)
+  self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE).then((c) => c.addAll(ASSETS))
-    // NO skipWaiting — new SW stays waiting. User triggers activation explicitly.
   );
 });
 

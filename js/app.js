@@ -2325,7 +2325,7 @@ function openInviteModal() {
     // Build share text synchronously — no await yet, gesture is live.
     const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate: ch.startDate });
     const link = deepLink('invite', payload);
-    const text = `${myName || 'A friend'} challenged you to a "${hb.name}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+    const text = `${myName || 'A friend'} challenged you to a "${hb.name}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
 
     // Persist + navigate BEFORE share — matches the accept flow.
     // Android backgrounds the app the moment share opens; the modal/view
@@ -2346,7 +2346,7 @@ async function shareInvite(ch) {
   const name = state.settings.userName || '';
   const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate });
   const link = deepLink('invite', payload);
-  const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+  const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
   await shareLink(text);
 }
 
@@ -2411,7 +2411,7 @@ function openAcceptModal(invite) {
     // challenge goes active — mobile blocks window.open after an await.
     const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate });
     const link = deepLink('accept', payload);
-    const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+    const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to add me. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
     // Create habit + challenge and render FIRST (sync state, background writes),
     // so the box exists before the share sheet can suspend this handler.
     if (newHabit) saveHabit(newHabit).catch(() => {});
@@ -2471,7 +2471,7 @@ function openSyncShareModal(ch) {
   send.addEventListener('click', async () => {
     const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
     const link = deepLink('sync', payload);
-    const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\nTap to update (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+    const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\n${link}\n\nTap the link to update. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
     // Persist FIRST (sync state, background write), then share last.
     ch.lastSentAt = Date.now();
     persistChallenge(ch).catch(() => {});

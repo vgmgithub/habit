@@ -2062,37 +2062,49 @@ function deepLink(type, payloadObj) {
 // file-encoding / deployment mishap (pure-ASCII source → always correct).
 const EMOJI_FIRE = String.fromCodePoint(0x1F525); // 🔥
 
-// Builds the wa.me URL. With a number → direct chat; without → contact picker.
-function waUrl(phone, text) {
-  const digits = (phone || '').replace(/[^0-9]/g, '');
-  const base = digits ? `https://wa.me/${digits}` : 'https://wa.me/';
-  return `${base}?text=${encodeURIComponent(text)}`;
-}
-// Share a prefilled message. MUST be invoked from a click handler as the FIRST
-// await (its native-share / window.open call has to run inside the user gesture).
+// Share a prefilled WhatsApp message. Must be the FIRST await in a click handler
+// so the user gesture is intact when navigator.share / window.open is called.
 //
-// Order of preference:
-//  1) navigator.share — the native share sheet. Critical on iOS: it's the ONLY
-//     thing that works when the page is running inside WhatsApp's in-app browser
-//     (a wa.me link there does nothing — you can't relaunch WhatsApp from its
-//     own webview). Lets the user pick WhatsApp + the contact.
-//  2) wa.me via window.open — desktop / Android browsers.
-//  3) clipboard copy + toast — last-resort manual paste.
-async function shareLink(text, phone) {
+// Strategy:
+//  1) navigator.share  — native share sheet, works on iOS PWA + Android PWA.
+//  2) window.open wa.me — opens WhatsApp via browser intent (Android / desktop).
+//  3) location.href wa.me — fallback when window.open is blocked.
+//  4) Clipboard + toast — last resort so the message is never lost.
+async function shareLink(text) {
+  const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+
+  // 1. Native share sheet
   if (navigator.share) {
-    try { await navigator.share({ text }); return; }
-    catch (e) { if (e && e.name === 'AbortError') return; /* cancelled — don't fall through */ }
+    try {
+      await navigator.share({ title: ‘Habit Challenge’, text });
+      return;
+    } catch (e) {
+      // AbortError = user cancelled — silent.
+      // NotAllowedError / anything else = fall through to wa.me.
+      if (e && e.name === ‘AbortError’) return;
+    }
   }
-  const url = waUrl(phone, text);
-  let win = null;
-  try { win = window.open(url, '_blank', 'noopener'); } catch (_) {}
-  if (win) return;
+
+  // 2. WhatsApp direct link via window.open (Android / desktop)
   try {
-    await navigator.clipboard.writeText(text);
-    toast('Couldn’t open WhatsApp — message copied. Paste it into your chat.', { duration: 4500 });
+    const win = window.open(waUrl, ‘_blank’);
+    if (win) return;
+  } catch (_) {}
+
+  // 3. location.href — triggers the Android intent / iOS universal link
+  //    (doesn’t leave the app because wa.me redirects to the WhatsApp app)
+  try {
+    location.href = waUrl;
     return;
   } catch (_) {}
-  location.href = url; // absolute last resort
+
+  // 4. Clipboard fallback
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(‘Copied — paste into WhatsApp to send.’, { duration: 4500 });
+  } catch (_) {
+    toast(‘Could not open WhatsApp. Copy the message manually.’, { duration: 5000 });
+  }
 }
 
 // True when running as an installed PWA (own window) rather than a browser tab.
@@ -2298,26 +2310,30 @@ function openInviteModal() {
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
-    // Persist BEFORE share (Android can background the app the moment share opens).
+
+    // Build share text synchronously — no await yet, gesture is live.
+    const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate: ch.startDate });
+    const link = deepLink('invite', payload);
+    const text = `${myName || 'A friend'} challenged you to a "${hb.name}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+
+    // Persist + navigate BEFORE share — matches the accept flow.
+    // Android backgrounds the app the moment share opens; the modal/view
+    // must already be in their final state before we hand off to the OS.
     persistChallenge(ch);
-    // Share is the FIRST await — user gesture is intact, nothing has been awaited yet.
-    await shareInvite(ch, myName);
-    // Navigate after share resolves/cancels (runs immediately on iOS/desktop;
-    // on Android it may run after the app resumes from background).
     closeModal();
     setView('leaderboard');
+
+    // shareLink is the FIRST and ONLY await — user gesture is still live.
+    await shareLink(text);
   });
 
   openModal('Invite a friend', body, [create]);
 }
 
-async function shareInvite(ch, myName) {
-  const name = (myName != null ? myName : state.settings.userName) || '';
-  const payload = LB.buildInvite({
-    challengeId: ch.id, habitName: ch.habitName,
-    inviterName: name,
-    startDate: ch.startDate,
-  });
+// Used by the "Resend invite" button on pending challenge cards.
+async function shareInvite(ch) {
+  const name = state.settings.userName || '';
+  const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate });
   const link = deepLink('invite', payload);
   const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
   await shareLink(text);

@@ -2285,27 +2285,27 @@ function openInviteModal() {
     ...habits.map((hb) => h('option', { value: hb.id }, `${hb.icon || '✅'}  ${hb.name}`)));
   body.appendChild(formRow('Habit to challenge', habitSel));
 
-  const friendName = h('input', { class: 'field', type: 'text', placeholder: "Friend's name (optional)", maxlength: '30' });
-  body.appendChild(formRow("Friend's name", friendName, 'Just a label for the card — pick the contact inside WhatsApp.'));
-
   const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & share');
   create.addEventListener('click', async () => {
     const hb = state.habits.find((x) => x.id === habitSel.value);
     if (!hb) { toast('Pick a habit'); return; }
-    const fname = friendName.value.trim() || 'Friend';
     const myName = state.settings.userName || '';
 
     const ch = {
       id: uid(), status: 'pending', role: 'inviter',
       habitId: hb.id, habitName: hb.name,
-      friendName: fname, friendPhone: '',
+      friendName: 'Friend', friendPhone: '',
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
+    // Persist BEFORE share (Android can background the app the moment share opens).
     persistChallenge(ch);
+    // Share is the FIRST await — user gesture is intact, nothing has been awaited yet.
+    await shareInvite(ch, myName);
+    // Navigate after share resolves/cancels (runs immediately on iOS/desktop;
+    // on Android it may run after the app resumes from background).
     closeModal();
     setView('leaderboard');
-    await shareInvite(ch, myName);
   });
 
   openModal('Invite a friend', body, [create]);

@@ -2157,8 +2157,44 @@ function myChallengeStats(ch) {
   return LB.challengeStats(habit, logsFor(ch.habitId), ch.startDate, M.todayStr());
 }
 
+// Phase A: Auto-reconcile challenge lifecycle — lock and snapshot results for
+// expired/ended challenges. Run on boot and before rendering leaderboard.
+function reconcileChallenges(today = M.todayStr()) {
+  state.challenges.forEach((ch) => {
+    if (ch.resultsLocked) return; // Already done
+    if (!ch.durationDays) ch.durationDays = 7; // Backfill legacy challenges
+    if (!ch.endDate) ch.endDate = LB.computeEndDate(ch.startDate, ch.durationDays);
+    if (!ch.type) ch.type = 'h2h'; // Extensibility hook
+
+    const hasEnded = ch.endDate <= today;
+    const wasActive = ch.status === 'active' || ch.status === 'pending';
+
+    if (hasEnded && wasActive && !ch.resultsLocked) {
+      // Challenge has expired — snapshot final stats and declare winner
+      const habit = state.habits.find((x) => x.id === ch.habitId);
+      const mine = habit ? LB.getEndStats(habit, logsFor(ch.habitId), ch) : null;
+      const theirs = { streak: ch.theirStreak | 0, pct: ch.theirPct | 0, done: ch.theirDays | 0 };
+      const declared = LB.declareWinner(mine, theirs);
+
+      ch.status = 'completed';
+      ch.resultsLocked = true;
+      ch.result = {
+        winner: declared.winner,
+        basis: declared.basis,
+        mine: mine || { streak: 0, pct: 0, done: 0, sched: 0 },
+        theirs,
+        decidedAt: Date.now(),
+      };
+      persistChallenge(ch);
+    }
+  });
+}
+
 function renderLeaderboard() {
   const root = app();
+
+  // Auto-reconcile on render so expired challenges lock immediately.
+  reconcileChallenges();
 
   root.appendChild(h('div', { class: 'lb-intro' },
     h('p', { class: 'muted small' },
@@ -2172,27 +2208,46 @@ function renderLeaderboard() {
   codeBtn.addEventListener('click', openPasteCodeModal);
   root.appendChild(codeBtn);
 
-  if (!state.challenges.length) {
+  // Categorize challenges by status
+  const active = state.challenges.filter((c) => c.status === 'active');
+  const pending = state.challenges.filter((c) => c.status === 'pending');
+  const completed = state.challenges.filter((c) => c.status === 'completed');
+
+  if (!active.length && !pending.length && !completed.length) {
     root.appendChild(h('div', { class: 'empty mini', style: { marginTop: '24px' } },
       h('div', { class: 'empty-emoji' }, '🏆'),
       h('p', null, 'No challenges yet. Invite a friend to start a head-to-head habit streak.')));
     return;
   }
 
-  // Active challenges first, then pending invites.
-  const active = state.challenges.filter((c) => c.status === 'active');
-  const pending = state.challenges.filter((c) => c.status !== 'active');
+  // Active challenges
   if (active.length) {
     root.appendChild(sectionLabel('Active challenges'));
     const list = h('div', { class: 'lb-list' });
     active.forEach((c) => list.appendChild(challengeCard(c)));
     root.appendChild(list);
   }
+
+  // Pending invites
   if (pending.length) {
     root.appendChild(sectionLabel('Pending invites'));
     const list = h('div', { class: 'lb-list' });
     pending.forEach((c) => list.appendChild(challengeCard(c)));
     root.appendChild(list);
+  }
+
+  // Challenge History (completed)
+  if (completed.length) {
+    root.appendChild(sectionLabel('Challenge history'));
+    const historyList = h('div', { class: 'lb-list' });
+    // Sort by completion date, most recent first
+    const sorted = [...completed].sort((a, b) => (b.result?.decidedAt || 0) - (a.result?.decidedAt || 0));
+    sorted.slice(0, 20).forEach((c) => historyList.appendChild(challengeHistoryCard(c)));
+    root.appendChild(historyList);
+    if (sorted.length > 20) {
+      root.appendChild(h('p', { class: 'muted small', style: { marginTop: '12px', textAlign: 'center' } },
+        `${sorted.length - 20} more completed challenges`));
+    }
   }
 }
 
@@ -2263,6 +2318,43 @@ function challengeCard(ch) {
   return card;
 }
 
+// Read-only display of a completed challenge with final results.
+function challengeHistoryCard(ch) {
+  const card = h('div', { class: 'lb-card' });
+  const result = ch.result || {};
+  const winner = result.winner;
+  const mine = result.mine || { streak: 0, pct: 0, done: 0 };
+  const theirs = result.theirs || { streak: 0, pct: 0, done: 0 };
+
+  // Header: friend + completion badge
+  card.appendChild(h('div', { class: 'lb-head' },
+    h('div', { class: 'lb-friend' },
+      h('span', { class: 'lb-avatar' }, (ch.friendName || '?').trim().charAt(0).toUpperCase() || '?'),
+      h('div', null,
+        h('div', { class: 'lb-friend-name' }, ch.friendName || 'Friend'),
+        h('div', { class: 'lb-habit' }, `${ch.habitName || 'Habit'} · ${ch.startDate} to ${ch.endDate}`))),
+    h('span', { class: 'lb-badge completed' }, 'Completed')));
+
+  // Score columns (final, read-only)
+  card.appendChild(h('div', { class: 'lb-score' },
+    scoreCol('You', mine.streak, mine.pct, mine.done, true, winner === 'me'),
+    h('div', { class: 'lb-vs' }, 'vs'),
+    scoreCol(ch.friendName || 'Friend', theirs.streak, theirs.pct, theirs.done, true, winner === 'them')));
+
+  // Winner banner
+  let banner;
+  if (winner === 'me') banner = h('div', { class: 'lb-lead win' }, '🏆 You won!');
+  else if (winner === 'them') banner = h('div', { class: 'lb-lead lose' }, `🏆 ${ch.friendName || 'Friend'} won!`);
+  else banner = h('div', { class: 'lb-lead tie' }, '🤝 Tie');
+  card.appendChild(banner);
+
+  // Duration info
+  card.appendChild(h('div', { class: 'lb-foot', style: { border: 'none', marginTop: '8px' } },
+    h('span', { class: 'muted small' }, `${ch.durationDays || 7}-day challenge`)));
+
+  return card;
+}
+
 function scoreCol(label, streak, pct, done, known, leading) {
   return h('div', { class: 'lb-col' + (leading ? ' leading' : '') },
     h('div', { class: 'lb-col-name' }, label),
@@ -2308,22 +2400,33 @@ function openInviteModal() {
     ...habits.map((hb) => h('option', { value: hb.id }, `${hb.icon || '✅'}  ${hb.name}`)));
   body.appendChild(formRow('Habit to challenge', habitSel));
 
+  const durationSel = h('select', { class: 'field' },
+    h('option', { value: '7' }, '7 days'),
+    h('option', { value: '15' }, '15 days'),
+    h('option', { value: '30', selected: true }, '30 days'));
+  body.appendChild(formRow('Challenge duration', durationSel));
+
   const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & share');
   create.addEventListener('click', async () => {
     const hb = state.habits.find((x) => x.id === habitSel.value);
     if (!hb) { toast('Pick a habit'); return; }
     const myName = state.settings.userName || '';
+    const durationDays = parseInt(durationSel.value, 10) || 7;
+
+    const startDate = M.todayStr();
+    const endDate = LB.computeEndDate(startDate, durationDays);
 
     const ch = {
       id: uid(), status: 'pending', role: 'inviter',
       habitId: hb.id, habitName: hb.name,
       friendName: 'Friend', friendPhone: '',
-      startDate: M.todayStr(), createdAt: Date.now(),
+      startDate, endDate, durationDays, type: 'h2h', createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+      resultsLocked: false, seenCelebration: false,
     };
 
     // Build share text synchronously — no await yet, gesture is live.
-    const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate: ch.startDate });
+    const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate, durationDays });
     const link = deepLink('invite', payload);
     const text = `${myName || 'A friend'} challenged you to a "${hb.name}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
 
@@ -2344,7 +2447,8 @@ function openInviteModal() {
 // Used by the "Resend invite" button on pending challenge cards.
 async function shareInvite(ch) {
   const name = state.settings.userName || '';
-  const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate });
+  const durationDays = ch.durationDays || 7;
+  const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate, durationDays });
   const link = deepLink('invite', payload);
   const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
   await shareLink(text);
@@ -2370,18 +2474,21 @@ function openAcceptModal(invite) {
   }
   const habits = activeHabits();
   const match = habits.find((hb) => hb.name.toLowerCase() === (invite.habitName || '').toLowerCase());
+  const durationDays = invite.durationDays || 7;
+  const endDate = LB.computeEndDate(invite.startDate, durationDays);
+
   const body = h('div', { class: 'lb-form' });
   body.appendChild(h('div', { class: 'lb-invite-banner' },
     h('div', { class: 'lb-avatar big' }, (invite.inviterName || '?').charAt(0).toUpperCase() || '?'),
     h('div', null,
       h('div', { class: 'lb-friend-name' }, `${invite.inviterName || 'A friend'} invited you`),
-      h('div', { class: 'lb-habit' }, `“${invite.habitName}” challenge · starts ${invite.startDate}`))));
+      h('div', { class: 'lb-habit' }, `”${invite.habitName}” · ${durationDays} days (${invite.startDate} to ${endDate})`))));
 
   // First option creates a brand-new habit; the rest link an existing one. This
   // means accepting is NEVER a dead-end, even if you don't track this habit yet.
   const CREATE = '__create__';
   const habitSel = h('select', { class: 'field' },
-    h('option', { value: CREATE, selected: match ? undefined : true }, `➕ Create new habit: "${invite.habitName}"`),
+    h('option', { value: CREATE, selected: match ? undefined : true }, `➕ Create new habit: “${invite.habitName}”`),
     ...habits.map((hb) => h('option', { value: hb.id, selected: match && hb.id === match.id ? true : undefined }, `🔗 ${hb.icon || '✅'}  ${hb.name}`)));
   body.appendChild(formRow('Your habit for this challenge', habitSel,
     'Create a fresh habit for the challenge, or link one you already track. The streak counts only from the start date either way.'));
@@ -2404,12 +2511,13 @@ function openAcceptModal(invite) {
       id: invite.challengeId, status: 'active', role: 'invitee',
       habitId, habitName: invite.habitName,
       friendName: invite.inviterName || 'Friend', friendPhone: invite.inviterPhone,
-      startDate: invite.startDate, createdAt: Date.now(),
+      startDate: invite.startDate, endDate, durationDays, type: 'h2h', createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+      resultsLocked: false, seenCelebration: false,
     };
     // Send acceptance back FIRST (synchronously, in-gesture) so the inviter's
     // challenge goes active — mobile blocks window.open after an await.
-    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate });
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate, durationDays });
     const link = deepLink('accept', payload);
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to add me. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
     // Create habit + challenge and render FIRST (sync state, background writes),
@@ -2433,6 +2541,10 @@ function openAcceptModal(invite) {
 // backgrounded the app), REBUILD it from the details echoed in the accept link
 // so the challenge is never lost.
 function handleAccept(accept) {
+  const durationDays = accept.durationDays || 7;
+  const startDate = accept.startDate || M.todayStr();
+  const endDate = LB.computeEndDate(startDate, durationDays);
+
   let ch = findChallenge(accept.challengeId);
   if (!ch) {
     const habit = state.habits.find((x) => x.name.toLowerCase() === (accept.habitName || '').toLowerCase());
@@ -2441,13 +2553,22 @@ function handleAccept(accept) {
       habitId: habit ? habit.id : '',
       habitName: accept.habitName || 'Habit',
       friendName: accept.accepterName || 'Friend', friendPhone: accept.accepterPhone || '',
-      startDate: accept.startDate || M.todayStr(), createdAt: Date.now(),
+      startDate, endDate, durationDays, type: 'h2h', createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+      resultsLocked: false, seenCelebration: false,
     };
   } else {
     ch.status = 'active';
     if (accept.accepterName) ch.friendName = accept.accepterName;
     if (accept.accepterPhone) ch.friendPhone = accept.accepterPhone;
+    // Backfill duration if missing
+    if (!ch.endDate) {
+      ch.startDate = ch.startDate || startDate;
+      ch.durationDays = ch.durationDays || durationDays;
+      ch.endDate = LB.computeEndDate(ch.startDate, ch.durationDays);
+      ch.type = ch.type || 'h2h';
+      ch.resultsLocked = false;
+    }
   }
   persistChallenge(ch);
   setView('leaderboard');
@@ -3322,6 +3443,9 @@ async function boot() {
     reloaded = true;
     window.location.reload();
   });
+
+  // Auto-reconcile challenge lifecycle (lock expired challenges, snapshot results).
+  reconcileChallenges();
 
   // Mark that the app has booted — no more lock screens until the next cold start.
   state.appWasRunning = true;

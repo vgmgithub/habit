@@ -25,6 +25,16 @@ import * as M from './model.js';
 // ---------------------------------------------------------------------------
 export const PAYLOAD_VERSION = 1;
 
+// Supported challenge durations (days). Creator picks one at invite time.
+export const DURATIONS = [7, 15, 30];
+
+// Clamp a received/stored duration to a supported value (default 7 for
+// legacy/missing — every challenge must have a duration).
+export function normDuration(d) {
+  const n = d | 0;
+  return DURATIONS.indexOf(n) >= 0 ? n : 7;
+}
+
 // ----- URL-safe base64 encode/decode (UTF-8 safe for unicode names) ---------
 export function encodePayload(obj) {
   const json = JSON.stringify(obj);
@@ -43,13 +53,13 @@ export function decodePayload(str) {
 }
 
 // ----- Builders: friendly args → compact payload ----------------------------
-export function buildInvite({ challengeId, habitName, inviterName, inviterPhone, startDate }) {
-  return { t: 'i', v: PAYLOAD_VERSION, c: challengeId, h: habitName || '', n: inviterName || '', p: digits(inviterPhone), d: startDate };
+export function buildInvite({ challengeId, habitName, inviterName, inviterPhone, startDate, durationDays }) {
+  return { t: 'i', v: PAYLOAD_VERSION, c: challengeId, h: habitName || '', n: inviterName || '', p: digits(inviterPhone), d: startDate, dr: normDuration(durationDays) };
 }
-export function buildAccept({ challengeId, accepterName, accepterPhone, habitName, startDate }) {
-  // habitName (h) + startDate (d) are echoed back from the invite so the inviter
-  // can REBUILD the challenge if their local pending copy was lost.
-  return { t: 'a', v: PAYLOAD_VERSION, c: challengeId, n: accepterName || '', p: digits(accepterPhone), h: habitName || '', d: startDate || '' };
+export function buildAccept({ challengeId, accepterName, accepterPhone, habitName, startDate, durationDays }) {
+  // habitName (h) + startDate (d) + duration (dr) echoed back from invite so
+  // inviter can REBUILD if their local pending copy was lost.
+  return { t: 'a', v: PAYLOAD_VERSION, c: challengeId, n: accepterName || '', p: digits(accepterPhone), h: habitName || '', d: startDate || '', dr: normDuration(durationDays) };
 }
 export function buildSync({ challengeId, streak, pct, days, ts }) {
   // NOTE: ts is a ms timestamp (>2^31) — never use `| 0`, which truncates to 32-bit.
@@ -59,11 +69,11 @@ export function buildSync({ challengeId, streak, pct, days, ts }) {
 // ----- Parsers: compact payload → friendly object (null if malformed) -------
 export function parseInvite(p) {
   if (!p || p.t !== 'i' || !p.c) return null;
-  return { challengeId: p.c, habitName: p.h || '', inviterName: p.n || '', inviterPhone: digits(p.p), startDate: p.d || M.todayStr() };
+  return { challengeId: p.c, habitName: p.h || '', inviterName: p.n || '', inviterPhone: digits(p.p), startDate: p.d || M.todayStr(), durationDays: normDuration(p.dr) };
 }
 export function parseAccept(p) {
   if (!p || p.t !== 'a' || !p.c) return null;
-  return { challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p), habitName: p.h || '', startDate: p.d || '' };
+  return { challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p), habitName: p.h || '', startDate: p.d || '', durationDays: normDuration(p.dr) };
 }
 export function parseSync(p) {
   if (!p || p.t !== 's' || !p.c) return null;
@@ -181,4 +191,44 @@ export function timeAgo(ms, now = Date.now()) {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return `${Math.floor(d / 7)}w ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase A: Challenge lifecycle, duration, winner declaration
+// ---------------------------------------------------------------------------
+
+// Calculate endDate from startDate + durationDays.
+export function computeEndDate(startDate, durationDays) {
+  const start = M.parseYmd(startDate);
+  return M.ymd(M.addDays(start, normDuration(durationDays) - 1));
+}
+
+// True if challenge has ended (endDate is before or on today).
+export function isExpired(challenge, today = M.todayStr()) {
+  const endDate = challenge.endDate || computeEndDate(challenge.startDate, challenge.durationDays);
+  return endDate < today || (endDate === today && challenge.status !== 'completed');
+}
+
+// Determine winner by tiebreak order: completion % → days → streak → draw.
+// Returns { winner: 'me' | 'them' | 'tie', basis: string }
+export function declareWinner(mine, theirs) {
+  const myPct = (mine && mine.pct) | 0;
+  const theirPct = (theirs && theirs.pct) | 0;
+  const myDays = (mine && mine.done) | 0;
+  const theirDays = (theirs && theirs.done) | 0;
+  const myStreak = (mine && mine.streak) | 0;
+  const theirStreak = (theirs && theirs.streak) | 0;
+
+  if (myPct !== theirPct) return { winner: myPct > theirPct ? 'me' : 'them', basis: 'completion' };
+  if (myDays !== theirDays) return { winner: myDays > theirDays ? 'me' : 'them', basis: 'days' };
+  if (myStreak !== theirStreak) return { winner: myStreak > theirStreak ? 'me' : 'them', basis: 'streak' };
+  return { winner: 'tie', basis: 'all equal' };
+}
+
+// Get stats for a challenge as of its endDate (not today). Returns { streak, done, sched, pct }
+// or null if the linked habit is missing. This is used when locking results.
+export function getEndStats(habit, logs, challenge) {
+  if (!habit) return null;
+  const endDate = challenge.endDate || computeEndDate(challenge.startDate, challenge.durationDays);
+  return challengeStats(habit, logs, challenge.startDate, endDate);
 }

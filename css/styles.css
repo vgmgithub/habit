@@ -986,6 +986,7 @@ h1, h2, h3, p { margin: 0; }
 }
 .lb-badge.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .lb-badge.pending { background: var(--card-2); color: var(--text-faint); }
+.lb-badge.completed { background: #d1fae5; color: #047857; }
 
 .lb-warn { font-size: 0.82rem; color: #f59e0b; margin-top: 8px; }
 

@@ -1,11 +1,16 @@
 // db.js — tiny promise-based IndexedDB wrapper.
-// Three stores keep concerns separate (see Core Goal #5):
-//   habits : habit definitions
-//   logs   : completion/skip entries (one row per habit per day, never duplicated)
-//   meta   : settings / app state (theme, pin, etc.)
+// Stores keep concerns separate (see Core Goal #5):
+//   habits      : habit definitions
+//   logs        : completion/skip entries (one row per habit per day, never duplicated)
+//   meta        : settings / app state (theme, pin, etc.)
+//   challenges  : peer leaderboard challenges (friend + habit + acceptance date + cached streaks)
+//   friendLinks : friend connection metadata (name, number, status)
+//
+// All storage is 100% local IndexedDB — nothing leaves the device. The leaderboard
+// "syncs" only by links the user manually shares over WhatsApp.
 
 const DB_NAME = 'habittracker';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let _dbPromise = null;
 
@@ -29,6 +34,18 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('meta')) {
         db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      // --- v2: peer leaderboard ---
+      if (!db.objectStoreNames.contains('challenges')) {
+        // One row per challenge. id is a locally-generated unique challenge id.
+        const s = db.createObjectStore('challenges', { keyPath: 'id' });
+        s.createIndex('status', 'status', { unique: false });
+        s.createIndex('friendId', 'friendId', { unique: false });
+        s.createIndex('habitId', 'habitId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains('friendLinks')) {
+        const s = db.createObjectStore('friendLinks', { keyPath: 'id' });
+        s.createIndex('status', 'status', { unique: false });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -85,7 +102,10 @@ export const db = {
     return reqToPromise(s.clear());
   },
   async clearAll() {
-    await Promise.all([this.clear('habits'), this.clear('logs'), this.clear('meta')]);
+    await Promise.all([
+      this.clear('habits'), this.clear('logs'), this.clear('meta'),
+      this.clear('challenges'), this.clear('friendLinks'),
+    ]);
   },
 };
 

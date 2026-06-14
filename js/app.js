@@ -1748,10 +1748,12 @@ function confirmClearAll() {
 // folder handle (not JSON-serializable; device-local).
 async function buildBackupData() {
   return {
-    app: 'habittracker', version: 2, exportedAt: new Date().toISOString(),
+    app: 'habittracker', version: 3, exportedAt: new Date().toISOString(),
     habits: await db.getAll('habits'),
     logs: await db.getAll('logs'),
     meta: (await db.getAll('meta')).filter((m) => m.key !== 'pinHash' && m.key !== 'backupFolderHandle'),
+    challenges: await db.getAll('challenges'),
+    friendLinks: await db.getAll('friendLinks'),
   };
 }
 
@@ -1770,6 +1772,9 @@ async function applyRestore(data) {
       await db.put('meta', m);
     }
   }
+  // Leaderboard stores (added in backup v3; absent in older backups → no-op).
+  if (Array.isArray(data.challenges)) await db.bulkPut('challenges', data.challenges);
+  if (Array.isArray(data.friendLinks)) await db.bulkPut('friendLinks', data.friendLinks);
   if (pinRow) await db.put('meta', pinRow);
   if (folderRow) await db.put('meta', folderRow);
 }

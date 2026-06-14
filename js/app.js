@@ -184,7 +184,11 @@ async function loadAll() {
   state.settings.customCategories   = await getSetting('customCategories', []);
   state.settings.userName           = (await getSetting('userName', '') || '').toString();
   state.settings.userPhone          = (await getSetting('userPhone', '') || '').toString();
-  state.challenges                  = await db.getAll('challenges');
+  // Defensive: if a stale cached db.js (older schema) is somehow running, the
+  // 'challenges' store may not exist yet — degrade gracefully instead of
+  // throwing and bricking the whole app. The self-heal in boot() will refresh.
+  try { state.challenges = await db.getAll('challenges'); }
+  catch (e) { state.challenges = []; }
 
   // Migrate legacy single `category` field into multi-category `categories[]`.
   // We do this lazily — only when the habit is next saved — to avoid mass-writes
@@ -3149,4 +3153,23 @@ async function boot() {
   state.appWasRunning = true;
 }
 
-boot();
+// Self-heal: if boot fails (most often a stale service-worker cache serving
+// mismatched JS after a deploy), drop the SW + caches ONCE and reload so the
+// fresh files load. Guarded by sessionStorage to avoid a reload loop on a real
+// bug. IndexedDB (user data) is never cleared here.
+boot().catch(async (err) => {
+  console.error('Boot failed:', err);
+  if (sessionStorage.getItem('ht_selfheal') === '1') return; // already tried this session
+  sessionStorage.setItem('ht_selfheal', '1');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (_) { /* best effort */ }
+  location.reload();
+});

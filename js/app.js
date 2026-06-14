@@ -205,11 +205,14 @@ function logsFor(id) { return state.logsByHabit.get(id) || []; }
 function activeHabits() { return state.habits.filter((x) => !x.archived && !x.paused); }
 function pausedHabits() { return state.habits.filter((x) =>  x.archived ||  x.paused); }
 
-async function saveHabit(habit) {
-  await db.put('habits', habit);
+// State update is SYNCHRONOUS; returns the write promise. `await saveHabit(...)`
+// still works for existing callers, and share flows can call it without await
+// (so the new habit exists in state before navigator.share suspends them).
+function saveHabit(habit) {
   const i = state.habits.findIndex((x) => x.id === habit.id);
   if (i >= 0) state.habits[i] = habit; else state.habits.push(habit);
   state.habits.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return db.put('habits', habit);
 }
 
 async function deleteHabit(id) {
@@ -2104,10 +2107,13 @@ function registerLeaderboardProtocol() {
   } catch (_) { /* not supported / blocked — paste-code remains the fallback */ }
 }
 
-async function persistChallenge(ch) {
-  await db.put('challenges', ch);
+// Updates in-memory state SYNCHRONOUSLY (so the UI can render immediately) and
+// returns the IndexedDB write promise. Callers in share flows intentionally do
+// NOT await it — the box must exist before navigator.share suspends the handler.
+function persistChallenge(ch) {
   const i = state.challenges.findIndex((c) => c.id === ch.id);
   if (i >= 0) state.challenges[i] = ch; else state.challenges.push(ch);
+  return db.put('challenges', ch);
 }
 function findChallenge(id) { return state.challenges.find((c) => c.id === id) || null; }
 
@@ -2307,13 +2313,15 @@ function openInviteModal() {
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
-    // Share FIRST (native sheet/WhatsApp) while still in the click gesture.
-    await shareInvite(ch, myName);
-    // Persist + UI updates afterwards.
-    if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
-    await persistChallenge(ch);
+    // Create + render the box FIRST (state is synchronous; DB write runs in the
+    // background). On Android the share sheet can suspend this handler, so the
+    // challenge must already exist before we share — never rely on post-share code.
+    if (nameField) { state.settings.userName = myName; setSetting('userName', myName); }
+    persistChallenge(ch).catch(() => {});
     closeModal();
     setView('leaderboard');
+    // Share LAST, still inside the click gesture (nothing above awaited).
+    await shareInvite(ch, myName);
   });
 
   openModal('Invite a friend', body, [create]);
@@ -2403,15 +2411,16 @@ function openAcceptModal(invite) {
     const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone });
     const link = deepLink('accept', payload);
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
-    // Share FIRST (native sheet works inside WhatsApp's in-app browser on iOS).
-    await shareLink(text, ch.friendPhone);
-    // Persist + UI afterwards.
-    if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
-    if (newHabit) await saveHabit(newHabit);
-    await persistChallenge(ch);
+    // Create habit + challenge and render FIRST (sync state, background writes),
+    // so the box exists before the share sheet can suspend this handler.
+    if (nameField) { state.settings.userName = myName; setSetting('userName', myName); }
+    if (newHabit) saveHabit(newHabit).catch(() => {});
+    persistChallenge(ch).catch(() => {});
     closeModal();
     setView('leaderboard');
     toast(newHabit ? `Created “${newHabit.name}” & accepted!` : 'Challenge accepted!', { celebrate: true });
+    // Share LAST, still inside the click gesture.
+    await shareLink(text, ch.friendPhone);
   });
   const decline = h('button', { class: 'btn wide' }, 'Decline');
   decline.addEventListener('click', closeModal);
@@ -2450,11 +2459,11 @@ function openSyncShareModal(ch) {
     const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
     const link = deepLink('sync', payload);
     const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\nTap to update (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
-    // Share FIRST (in-gesture), then persist.
-    await shareLink(text, ch.friendPhone);
+    // Persist FIRST (sync state, background write), then share last.
     ch.lastSentAt = Date.now();
-    await persistChallenge(ch);
+    persistChallenge(ch).catch(() => {});
     closeModal();
+    await shareLink(text, ch.friendPhone);
   });
   openModal('Sync progress', body, [send]);
 }

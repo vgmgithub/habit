@@ -2069,6 +2069,26 @@ function openWhatsApp(phone, text) {
   return url;
 }
 
+// True when running as an installed PWA (own window) rather than a browser tab.
+function isStandalone() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches
+      || window.matchMedia('(display-mode: minimal-ui)').matches
+      || window.navigator.standalone === true; // iOS Safari home-screen
+  } catch (_) { return false; }
+}
+
+// Best-effort: register a custom protocol so a browser tab can hand a payload to
+// THIS installed PWA via `web+habit:<code>`. Chromium-only, needs install + a
+// one-time user approval, and is silently ignored elsewhere (e.g. iOS).
+function registerLeaderboardProtocol() {
+  try {
+    if ('registerProtocolHandler' in navigator) {
+      navigator.registerProtocolHandler('web+habit', dirUrl() + 'index.html?proto=%s');
+    }
+  } catch (_) { /* not supported / blocked — paste-code remains the fallback */ }
+}
+
 async function persistChallenge(ch) {
   await db.put('challenges', ch);
   const i = state.challenges.findIndex((c) => c.id === ch.id);
@@ -2093,6 +2113,10 @@ function renderLeaderboard() {
   const inviteBtn = h('button', { class: 'btn btn-primary wide' }, '➕ Invite a friend');
   inviteBtn.addEventListener('click', openInviteModal);
   root.appendChild(inviteBtn);
+
+  const codeBtn = h('button', { class: 'btn wide' }, '📥 I have a code');
+  codeBtn.addEventListener('click', openPasteCodeModal);
+  root.appendChild(codeBtn);
 
   if (!state.challenges.length) {
     root.appendChild(h('div', { class: 'empty mini', style: { marginTop: '24px' } },
@@ -2311,6 +2335,7 @@ function openAcceptModal(invite) {
     return;
   }
   const habits = activeHabits();
+  const match = habits.find((hb) => hb.name.toLowerCase() === (invite.habitName || '').toLowerCase());
   const body = h('div', { class: 'lb-form' });
   body.appendChild(h('div', { class: 'lb-invite-banner' },
     h('div', { class: 'lb-avatar big' }, (invite.inviterName || '?').charAt(0).toUpperCase() || '?'),
@@ -2324,29 +2349,36 @@ function openAcceptModal(invite) {
     body.appendChild(formRow('Your name', nameField));
   }
 
-  let habitSel = null;
-  if (habits.length) {
-    // Default to a same-named habit if one exists.
-    const match = habits.find((hb) => hb.name.toLowerCase() === (invite.habitName || '').toLowerCase());
-    habitSel = h('select', { class: 'field' },
-      ...habits.map((hb) => h('option', { value: hb.id, selected: match && hb.id === match.id ? true : undefined }, `${hb.icon || '✅'}  ${hb.name}`)));
-    body.appendChild(formRow('Link to your habit', habitSel,
-      'The challenge tracks this habit on your side, counting only from the start date.'));
-  } else {
-    body.appendChild(h('p', { class: 'lb-warn' }, 'You have no habits yet. Add one first, then re-open the invite link.'));
-  }
+  // First option creates a brand-new habit; the rest link an existing one. This
+  // means accepting is NEVER a dead-end, even if you don't track this habit yet.
+  const CREATE = '__create__';
+  const habitSel = h('select', { class: 'field' },
+    h('option', { value: CREATE, selected: match ? undefined : true }, `➕ Create new habit: "${invite.habitName}"`),
+    ...habits.map((hb) => h('option', { value: hb.id, selected: match && hb.id === match.id ? true : undefined }, `🔗 ${hb.icon || '✅'}  ${hb.name}`)));
+  body.appendChild(formRow('Your habit for this challenge', habitSel,
+    'Create a fresh habit for the challenge, or link one you already track. The streak counts only from the start date either way.'));
 
   const accept = h('button', { class: 'btn btn-primary wide' }, '✅ Accept challenge');
-  accept.disabled = !habits.length;
   accept.addEventListener('click', async () => {
     let myName = state.settings.userName;
     if (nameField) {
       myName = nameField.value.trim();
       if (!myName) { toast('Enter your name'); nameField.focus(); return; }
     }
+    // Resolve the habit synchronously (blankHabit() generates an id without I/O)
+    // so we can open WhatsApp in-gesture before any await; saving happens after.
+    let newHabit = null, habitId;
+    if (habitSel.value === CREATE) {
+      newHabit = blankHabit();
+      newHabit.name = invite.habitName || 'Challenge habit';
+      newHabit.routine = 'anytime';
+      habitId = newHabit.id;
+    } else {
+      habitId = habitSel.value;
+    }
     const ch = {
       id: invite.challengeId, status: 'active', role: 'invitee',
-      habitId: habitSel.value, habitName: invite.habitName,
+      habitId, habitName: invite.habitName,
       friendName: invite.inviterName || 'Friend', friendPhone: invite.inviterPhone,
       startDate: invite.startDate, createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
@@ -2359,10 +2391,11 @@ function openAcceptModal(invite) {
     openWhatsApp(ch.friendPhone, text);
     // Persist + UI afterwards.
     if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
+    if (newHabit) await saveHabit(newHabit);
     await persistChallenge(ch);
     closeModal();
     setView('leaderboard');
-    toast('Challenge accepted!', { celebrate: true });
+    toast(newHabit ? `Created “${newHabit.name}” & accepted!` : 'Challenge accepted!', { celebrate: true });
   });
   const decline = h('button', { class: 'btn wide' }, 'Decline');
   decline.addEventListener('click', closeModal);
@@ -2440,23 +2473,92 @@ function handleSyncReceive(sync) {
 
 // ----- Deep-link router (called from boot) ----------------------------------
 function handleLeaderboardLink(params) {
+  // Launched via the custom protocol (web+habit:CODE) → we ARE the PWA now.
+  const proto = params.get('proto');
+  if (proto) {
+    history.replaceState({}, document.title, location.pathname);
+    const code = proto.replace(/^web\+habit:/i, '');
+    routeLeaderboardPayload(LB.decodePayload(extractPayloadString(code)));
+    return;
+  }
   const raw = params.get('invite') || params.get('accept') || params.get('sync');
   if (!raw) return;
-  const payload = LB.decodePayload(raw);
   // Scrub the URL so a reload doesn't replay the action.
   history.replaceState({}, document.title, location.pathname);
+  const payload = LB.decodePayload(raw);
   if (!payload) { toast('That leaderboard link looks invalid'); return; }
+  // If a browser tab opened the link, offer to hand off to the installed PWA
+  // (where the user's real data lives). In the PWA itself, just process it.
+  if (isStandalone()) routeLeaderboardPayload(payload);
+  else offerOpenInApp(payload, raw);
+}
 
-  if (params.has('invite')) {
+// Shown when a leaderboard link opens in a browser instead of the installed PWA.
+function offerOpenInApp(payload, code) {
+  const body = h('div', null,
+    h('p', null, 'This opened in your browser. For it to update your real data, open it in the installed Habits app.'),
+    h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'No installed app (or it doesn’t switch)? Just continue here — on Android the browser shares the app’s data.'));
+  const openApp = h('button', { class: 'btn btn-primary wide' }, '📱 Open in Habits app');
+  openApp.addEventListener('click', () => { try { location.href = 'web+habit:' + code; } catch (_) {} });
+  const here = h('button', { class: 'btn wide' }, 'Continue here');
+  here.addEventListener('click', () => { closeModal(); routeLeaderboardPayload(payload); });
+  openModal('Open in the app', body, [openApp, here]);
+}
+
+// Type-agnostic router: works for both deep links AND pasted codes. The payload's
+// own `t` field ('i' | 'a' | 's') decides the flow — no URL param needed.
+function routeLeaderboardPayload(payload) {
+  if (!payload || !payload.t) { toast('That code looks invalid'); return false; }
+  if (payload.t === 'i') {
     const invite = LB.parseInvite(payload);
-    if (invite) { setView('leaderboard'); openAcceptModal(invite); } else toast('Invalid invite link');
-  } else if (params.has('accept')) {
+    if (invite) { setView('leaderboard'); openAcceptModal(invite); return true; }
+  } else if (payload.t === 'a') {
     const accept = LB.parseAccept(payload);
-    if (accept) handleAccept(accept); else toast('Invalid acceptance link');
-  } else if (params.has('sync')) {
+    if (accept) { handleAccept(accept); return true; }
+  } else if (payload.t === 's') {
     const sync = LB.parseSync(payload);
-    if (sync) handleSyncReceive(sync); else toast('Invalid sync link');
+    if (sync) { handleSyncReceive(sync); return true; }
   }
+  toast('That code is not a valid invite, acceptance or sync');
+  return false;
+}
+
+// Accepts a pasted full link OR a bare payload code and extracts the base64 part.
+function extractPayloadString(input) {
+  const s = (input || '').trim();
+  if (!s) return null;
+  const m = s.match(/[?&](?:invite|accept|sync)=([^&\s]+)/);
+  if (m) return m[1];
+  return s.replace(/\s+/g, ''); // assume the whole thing is the payload
+}
+
+// "Paste code" flow — the reliable cross-context path. Because a WhatsApp link
+// often opens in a browser instead of the installed PWA (separate storage on
+// iOS), the recipient can instead open THEIR PWA, come here, and paste the
+// link/code so the action runs where their habit data actually lives.
+function openPasteCodeModal() {
+  const body = h('div', { class: 'lb-form' });
+  body.appendChild(h('p', { class: 'muted small' },
+    'Got an invite, acceptance, or sync from WhatsApp? Paste the whole message (or just the link) here — it works even if the link opened in a browser instead of this app.'));
+  const ta = h('textarea', { class: 'field', rows: '4', placeholder: 'Paste the WhatsApp link or code here…', style: { resize: 'vertical', minHeight: '90px' } });
+  body.appendChild(ta);
+
+  const pasteBtn = h('button', { class: 'btn wide', type: 'button' }, '📋 Paste from clipboard');
+  pasteBtn.addEventListener('click', async () => {
+    try { const t = await navigator.clipboard.readText(); if (t) ta.value = t; }
+    catch (_) { toast('Couldn’t read clipboard — paste manually'); }
+  });
+  body.appendChild(pasteBtn);
+
+  const go = h('button', { class: 'btn btn-primary wide' }, 'Continue');
+  go.addEventListener('click', () => {
+    const payload = LB.decodePayload(extractPayloadString(ta.value));
+    if (!payload) { toast('Couldn’t read that code — paste the full WhatsApp link'); return; }
+    closeModal();
+    routeLeaderboardPayload(payload);
+  });
+  openModal('I have a code', body, [go]);
+  setTimeout(() => ta.focus(), 120);
 }
 
 // Small form/layout helpers for leaderboard modals.
@@ -3165,6 +3267,15 @@ async function boot() {
       });
     } catch (e) {}
   }
+  // Register the custom protocol once (best-effort) so WhatsApp/browser links can
+  // hand off into the installed PWA. Guarded so we don't re-prompt every launch.
+  try {
+    if (!localStorage.getItem('ht_proto_registered')) {
+      registerLeaderboardProtocol();
+      localStorage.setItem('ht_proto_registered', '1');
+    }
+  } catch (_) {}
+
   // When user triggers skip-wait, page reloads via this handler (only once per session)
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {

@@ -2062,40 +2062,51 @@ function deepLink(type, payloadObj) {
 // file-encoding / deployment mishap (pure-ASCII source → always correct).
 const EMOJI_FIRE = String.fromCodePoint(0x1F525); // 🔥
 
-// Share a prefilled WhatsApp message. Must be the FIRST await in a click handler
-// so the user gesture is intact when navigator.share / window.open is called.
+// True for phones/tablets — where a wa.me link should drive the WhatsApp app
+// rather than spawn a new browser tab.
+function isMobile() {
+  try { return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''); }
+  catch (_) { return false; }
+}
+
+// Share a prefilled WhatsApp message. MUST be the FIRST await in a click handler
+// so the user gesture is intact when navigator.share / navigation fires.
 //
 // Strategy:
-//  1) navigator.share  — native share sheet, works on iOS PWA + Android PWA.
-//  2) window.open wa.me — opens WhatsApp via browser intent (Android / desktop).
-//  3) location.href wa.me — fallback when window.open is blocked.
-//  4) Clipboard + toast — last resort so the message is never lost.
+//  1) navigator.share — native share sheet. HTTPS-only, but the best path on
+//     mobile PWAs and the ONLY way to reach WhatsApp from inside its own
+//     in-app browser on iOS.
+//  2) Mobile → location.href to wa.me. We deliberately DON'T use window.open on
+//     mobile: in a standalone PWA it's blocked (returns null) or hands back a
+//     dead about:blank window (truthy), so the old "if (win) return" silently
+//     swallowed the share. Navigating to wa.me reliably opens the WhatsApp app
+//     on both Android and iOS; the PWA is restored when the user comes back.
+//  3) Desktop → window.open a new tab so the app stays put.
+//  4) Clipboard copy — last resort so the message is never lost.
 async function shareLink(text) {
   const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
 
   // 1. Native share sheet
   if (navigator.share) {
     try {
-      await navigator.share({ title: 'Habit Challenge', text });
+      await navigator.share({ text });
       return;
     } catch (e) {
-      // AbortError = user cancelled — silent.
-      // NotAllowedError / anything else = fall through to wa.me.
+      // AbortError = user cancelled — stop. Anything else → fall through.
       if (e && e.name === 'AbortError') return;
     }
   }
 
-  // 2. WhatsApp direct link via window.open (Android / desktop)
-  try {
-    const win = window.open(waUrl, '_blank');
-    if (win) return;
-  } catch (_) {}
-
-  // 3. location.href — triggers the Android intent / iOS universal link
-  //    (doesn’t leave the app because wa.me redirects to the WhatsApp app)
-  try {
+  // 2. Mobile (incl. installed PWA, or plain-HTTP where navigator.share is absent)
+  if (isMobile() || isStandalone()) {
     location.href = waUrl;
     return;
+  }
+
+  // 3. Desktop browser — new tab keeps the app open
+  try {
+    const win = window.open(waUrl, '_blank', 'noopener');
+    if (win) return;
   } catch (_) {}
 
   // 4. Clipboard fallback
@@ -2103,7 +2114,7 @@ async function shareLink(text) {
     await navigator.clipboard.writeText(text);
     toast('Copied — paste into WhatsApp to send.', { duration: 4500 });
   } catch (_) {
-    toast('Could not open WhatsApp. Copy the message manually.', { duration: 5000 });
+    location.href = waUrl;
   }
 }
 

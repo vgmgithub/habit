@@ -80,7 +80,7 @@ const state = {
     theme: 'auto', accent: '#10b981', pinHash: null, reminders: true,
     wrapUp: { enabled: true, time: DEFAULT_WRAPUP_TIME },
     notificationSound: true, customCategories: [],
-    userName: '', userPhone: '',
+    userName: '',
   },
   challenges: [],            // peer leaderboard challenges (local IndexedDB)
   view: 'today',
@@ -183,7 +183,6 @@ async function loadAll() {
   state.settings.notificationSound  = await getSetting('notificationSound', true);
   state.settings.customCategories   = await getSetting('customCategories', []);
   state.settings.userName           = (await getSetting('userName', '') || '').toString();
-  state.settings.userPhone          = (await getSetting('userPhone', '') || '').toString();
   // Defensive: if a stale cached db.js (older schema) is somehow running, the
   // 'challenges' store may not exist yet — degrade gracefully instead of
   // throwing and bricking the whole app. The self-heal in boot() will refresh.
@@ -395,20 +394,21 @@ function render() {
   const v = state.view;
   $('#view-title').textContent = ({
     today: '', tracker: 'Tracker', stats: 'Statistics', insights: 'Insights',
-    leaderboard: 'Leaderboard', settings: 'Settings',
+    leaderboard: 'Leaderboard', settings: 'Settings', habits: 'My Habits',
   })[v] || '';
   $('#appbar-actions').innerHTML = '';
-  // Persistent gear icon (settings) in the app bar — except when we're already
-  // on Settings, where it'd be redundant.
-  if (v !== 'settings') {
-    const gear = h('button', { class: 'icon-btn appbar-icon', 'aria-label': 'Settings' }, '⚙');
-    gear.addEventListener('click', () => setView('settings'));
-    $('#appbar-actions').appendChild(gear);
-  } else {
-    // Show a back arrow when on Settings to make the exit obvious
+  if (v === 'settings') {
     const back = h('button', { class: 'icon-btn appbar-icon', 'aria-label': 'Back' }, '←');
     back.addEventListener('click', () => setView('today'));
     $('#appbar-actions').appendChild(back);
+  } else if (v === 'habits') {
+    const back = h('button', { class: 'icon-btn appbar-icon', 'aria-label': 'Back' }, '←');
+    back.addEventListener('click', () => setView('settings'));
+    $('#appbar-actions').appendChild(back);
+  } else {
+    const gear = h('button', { class: 'icon-btn appbar-icon', 'aria-label': 'Settings' }, '⚙');
+    gear.addEventListener('click', () => setView('settings'));
+    $('#appbar-actions').appendChild(gear);
   }
   app().innerHTML = '';
   removeFab();
@@ -417,6 +417,7 @@ function render() {
   else if (v === 'stats') renderStats();
   else if (v === 'insights') renderInsights();
   else if (v === 'leaderboard') renderLeaderboard();
+  else if (v === 'habits') renderHabitsManage();
   else if (v === 'settings') renderSettings();
   app().scrollTop = 0;
 }
@@ -1277,12 +1278,9 @@ async function reorder(habit, dir) {
   render();
 }
 
-// ----- Settings -------------------------------------------------------------
-function renderSettings() {
+// ----- My Habits (sub-page from Settings) -----------------------------------
+function renderHabitsManage() {
   const root = app();
-
-  // Habits management
-  root.appendChild(sectionLabel('Habits'));
   const active = activeHabits();
   const paused = pausedHabits();
 
@@ -1295,7 +1293,6 @@ function renderSettings() {
   root.appendChild(browse);
 
   if (active.length || paused.length) {
-    // Group active habits by routine
     for (const r of ROUTINES) {
       const group = active.filter((x) => (x.routine || 'anytime') === r.key);
       if (!group.length) continue;
@@ -1330,8 +1327,23 @@ function renderSettings() {
     root.appendChild(h('div', { class: 'empty mini' }, h('div', { class: 'empty-emoji' }, '📋'),
       h('p', null, 'No habits yet. Pick from the library above or create your own.')));
   }
+}
 
-  root.appendChild(sectionLabel('Settings'));
+// ----- Settings -------------------------------------------------------------
+function renderSettings() {
+  const root = app();
+
+  // Habits — navigate to sub-page
+  root.appendChild(sectionLabel('Habits'));
+  const active = activeHabits();
+  const paused = pausedHabits();
+  const habitCount = active.length + paused.length;
+  const manageHabitsBtn = h('button', { class: 'btn btn-primary wide' }, '📋 Add & Edit Habits');
+  manageHabitsBtn.addEventListener('click', () => setView('habits'));
+  const habitHint = h('div', { class: 'setting-hint', style: { marginTop: '6px', marginBottom: '8px' } },
+    habitCount ? `${active.length} active${paused.length ? `, ${paused.length} paused` : ''}` : 'No habits yet');
+  root.appendChild(manageHabitsBtn);
+  root.appendChild(habitHint);
 
   // Profile (name)
   root.appendChild(sectionLabel('Profile'));
@@ -1343,12 +1355,6 @@ function renderSettings() {
   });
   root.appendChild(settingRow('Name', nameInput, "Shown in greetings throughout the app. You can change or clear it anytime."));
 
-  const phoneInput = h('input', { class: 'field', type: 'tel', placeholder: 'e.g. +91 98765 43210', value: state.settings.userPhone || '', maxlength: '20' });
-  phoneInput.addEventListener('change', async () => {
-    state.settings.userPhone = phoneInput.value.trim();
-    await setSetting('userPhone', state.settings.userPhone);
-  });
-  root.appendChild(settingRow('WhatsApp number', phoneInput, 'Optional. Added to leaderboard invites so friends can message you back. Stays on this device.'));
 
   // Appearance
   root.appendChild(sectionLabel('Appearance'));
@@ -2324,12 +2330,12 @@ async function shareInvite(ch, myName) {
   const name = (myName != null ? myName : state.settings.userName) || '';
   const payload = LB.buildInvite({
     challengeId: ch.id, habitName: ch.habitName,
-    inviterName: name, inviterPhone: state.settings.userPhone,
+    inviterName: name,
     startDate: ch.startDate,
   });
   const link = deepLink('invite', payload);
   const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
-  await shareLink(text, ch.friendPhone);
+  await shareLink(text);
 }
 
 async function pickContact(nameInput, phoneInput) {
@@ -2398,7 +2404,7 @@ function openAcceptModal(invite) {
     };
     // Send acceptance back FIRST (synchronously, in-gesture) so the inviter's
     // challenge goes active — mobile blocks window.open after an await.
-    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone, habitName: ch.habitName, startDate: ch.startDate });
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate });
     const link = deepLink('accept', payload);
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
     // Create habit + challenge and render FIRST (sync state, background writes),
@@ -2410,7 +2416,7 @@ function openAcceptModal(invite) {
     setView('leaderboard');
     toast(newHabit ? `Created “${newHabit.name}” & accepted!` : 'Challenge accepted!', { celebrate: true });
     // Share LAST, still inside the click gesture.
-    await shareLink(text, ch.friendPhone);
+    await shareLink(text);
   });
   const decline = h('button', { class: 'btn wide' }, 'Decline');
   decline.addEventListener('click', closeModal);
@@ -2466,7 +2472,7 @@ function openSyncShareModal(ch) {
     ch.lastSentAt = Date.now();
     persistChallenge(ch).catch(() => {});
     closeModal();
-    await shareLink(text, ch.friendPhone);
+    await shareLink(text);
   });
   openModal('Sync progress', body, [send]);
 }

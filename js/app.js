@@ -6,6 +6,7 @@ import { db, getSetting, setSetting } from './db.js';
 import * as M from './model.js';
 import { pickQuote } from './quotes.js';
 import * as BK from './backup.js';
+import * as LB from './leaderboard.js';
 
 const BACKUP_KEEP = 2; // dated backups retained in the folder before auto-deleting oldest
 
@@ -79,8 +80,9 @@ const state = {
     theme: 'auto', accent: '#10b981', pinHash: null, reminders: true,
     wrapUp: { enabled: true, time: DEFAULT_WRAPUP_TIME },
     notificationSound: true, customCategories: [],
-    userName: '',
+    userName: '', userPhone: '',
   },
+  challenges: [],            // peer leaderboard challenges (local IndexedDB)
   view: 'today',
   quoteCycle: 0,             // tap-to-cycle offset for the Today motivational quote
   reminderTimers: [],
@@ -181,6 +183,8 @@ async function loadAll() {
   state.settings.notificationSound  = await getSetting('notificationSound', true);
   state.settings.customCategories   = await getSetting('customCategories', []);
   state.settings.userName           = (await getSetting('userName', '') || '').toString();
+  state.settings.userPhone          = (await getSetting('userPhone', '') || '').toString();
+  state.challenges                  = await db.getAll('challenges');
 
   // Migrate legacy single `category` field into multi-category `categories[]`.
   // We do this lazily — only when the habit is next saved — to avoid mass-writes
@@ -382,7 +386,7 @@ function render() {
   const v = state.view;
   $('#view-title').textContent = ({
     today: '', tracker: 'Tracker', stats: 'Statistics', insights: 'Insights',
-    settings: 'Settings',
+    leaderboard: 'Leaderboard', settings: 'Settings',
   })[v] || '';
   $('#appbar-actions').innerHTML = '';
   // Persistent gear icon (settings) in the app bar — except when we're already
@@ -403,6 +407,7 @@ function render() {
   else if (v === 'tracker') renderTracker();
   else if (v === 'stats') renderStats();
   else if (v === 'insights') renderInsights();
+  else if (v === 'leaderboard') renderLeaderboard();
   else if (v === 'settings') renderSettings();
   app().scrollTop = 0;
 }
@@ -1329,6 +1334,13 @@ function renderSettings() {
   });
   root.appendChild(settingRow('Name', nameInput, "Shown in greetings throughout the app. You can change or clear it anytime."));
 
+  const phoneInput = h('input', { class: 'field', type: 'tel', placeholder: 'e.g. +91 98765 43210', value: state.settings.userPhone || '', maxlength: '20' });
+  phoneInput.addEventListener('change', async () => {
+    state.settings.userPhone = phoneInput.value.trim();
+    await setSetting('userPhone', state.settings.userPhone);
+  });
+  root.appendChild(settingRow('WhatsApp number', phoneInput, 'Optional. Added to leaderboard invites so friends can message you back. Stays on this device.'));
+
   // Appearance
   root.appendChild(sectionLabel('Appearance'));
   const themeSeg = segmented(['auto', 'light', 'dark'], state.settings.theme, async (v) => {
@@ -2019,6 +2031,417 @@ async function checkForUpdates() {
 // Modal system supports STACKING — opening a dialog from inside another
 // (e.g. "+ New category" from the habit editor) preserves the parent so the
 // user returns to where they were when the inner dialog closes.
+// ===========================================================================
+// LEADERBOARD — peer-to-peer habit challenges over WhatsApp links.
+// All data is local; WhatsApp only carries encoded payloads the user sends.
+// ===========================================================================
+
+// Base directory URL (so deep links work whether served from / or /habit/).
+function dirUrl() {
+  return location.origin + location.pathname.replace(/[^/]*$/, '');
+}
+function deepLink(type, payloadObj) {
+  return `${dirUrl()}index.html?${type}=${LB.encodePayload(payloadObj)}`;
+}
+// Opens WhatsApp with prefilled text. With a number → direct chat; without → picker.
+function openWhatsApp(phone, text) {
+  const digits = (phone || '').replace(/[^0-9]/g, '');
+  const base = digits ? `https://wa.me/${digits}` : 'https://wa.me/';
+  window.open(`${base}?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+async function persistChallenge(ch) {
+  await db.put('challenges', ch);
+  const i = state.challenges.findIndex((c) => c.id === ch.id);
+  if (i >= 0) state.challenges[i] = ch; else state.challenges.push(ch);
+}
+function findChallenge(id) { return state.challenges.find((c) => c.id === id) || null; }
+
+// Live stats for MY side of a challenge (computed from local logs, never cached).
+function myChallengeStats(ch) {
+  const habit = state.habits.find((x) => x.id === ch.habitId);
+  if (!habit) return null;
+  return LB.challengeStats(habit, logsFor(ch.habitId), ch.startDate, M.todayStr());
+}
+
+function renderLeaderboard() {
+  const root = app();
+
+  root.appendChild(h('div', { class: 'lb-intro' },
+    h('p', { class: 'muted small' },
+      'Challenge friends on a habit. Everything stays on your phone — progress is shared only through WhatsApp links you send.')));
+
+  const inviteBtn = h('button', { class: 'btn btn-primary wide' }, '➕ Invite a friend');
+  inviteBtn.addEventListener('click', openInviteModal);
+  root.appendChild(inviteBtn);
+
+  if (!state.challenges.length) {
+    root.appendChild(h('div', { class: 'empty mini', style: { marginTop: '24px' } },
+      h('div', { class: 'empty-emoji' }, '🏆'),
+      h('p', null, 'No challenges yet. Invite a friend to start a head-to-head habit streak.')));
+    return;
+  }
+
+  // Active challenges first, then pending invites.
+  const active = state.challenges.filter((c) => c.status === 'active');
+  const pending = state.challenges.filter((c) => c.status !== 'active');
+  if (active.length) {
+    root.appendChild(sectionLabel('Active challenges'));
+    const list = h('div', { class: 'lb-list' });
+    active.forEach((c) => list.appendChild(challengeCard(c)));
+    root.appendChild(list);
+  }
+  if (pending.length) {
+    root.appendChild(sectionLabel('Pending invites'));
+    const list = h('div', { class: 'lb-list' });
+    pending.forEach((c) => list.appendChild(challengeCard(c)));
+    root.appendChild(list);
+  }
+}
+
+function challengeCard(ch) {
+  const mine = myChallengeStats(ch);
+  const isActive = ch.status === 'active';
+  const synced = ch.lastSyncedAt > 0;
+  const theirs = { streak: ch.theirStreak | 0, pct: ch.theirPct | 0, done: ch.theirDays | 0 };
+
+  const card = h('div', { class: 'lb-card' });
+
+  // Header: friend + status badge
+  card.appendChild(h('div', { class: 'lb-head' },
+    h('div', { class: 'lb-friend' },
+      h('span', { class: 'lb-avatar' }, (ch.friendName || '?').trim().charAt(0).toUpperCase() || '?'),
+      h('div', null,
+        h('div', { class: 'lb-friend-name' }, ch.friendName || 'Friend'),
+        h('div', { class: 'lb-habit' }, `${ch.habitName || 'Habit'} · since ${ch.startDate}`))),
+    h('span', { class: 'lb-badge ' + (isActive ? 'on' : 'pending') }, isActive ? 'Active' : 'Pending')));
+
+  if (!mine) {
+    card.appendChild(h('div', { class: 'lb-warn' }, '⚠ Linked habit was removed. Re-invite to continue.'));
+  }
+
+  // Score columns
+  const myStreak = mine ? mine.streak : 0;
+  const myPct = mine ? mine.pct : 0;
+  const myDone = mine ? mine.done : 0;
+  const cmp = LB.compare(mine || { streak: 0, pct: 0 }, theirs);
+
+  card.appendChild(h('div', { class: 'lb-score' },
+    scoreCol('You', myStreak, myPct, myDone, mine ? true : false, cmp.leader === 'me'),
+    h('div', { class: 'lb-vs' }, 'vs'),
+    scoreCol(ch.friendName || 'Friend', theirs.streak, theirs.pct, theirs.done, synced, cmp.leader === 'them')));
+
+  // Leader line (only meaningful once the friend has synced at least once)
+  if (isActive) {
+    let lead;
+    if (!synced) lead = h('div', { class: 'lb-lead muted' }, 'Awaiting your friend’s first sync…');
+    else if (cmp.leader === 'tie') lead = h('div', { class: 'lb-lead tie' }, '🤝 Neck and neck — keep going!');
+    else if (cmp.leader === 'me') {
+      const by = cmp.streakDiff > 0 ? `${cmp.streakDiff} day${cmp.streakDiff === 1 ? '' : 's'}` : `${cmp.pctDiff}% completion`;
+      lead = h('div', { class: 'lb-lead win' }, `🏆 You’re ahead by ${by}`);
+    } else {
+      const by = cmp.streakDiff > 0 ? `${cmp.streakDiff} day${cmp.streakDiff === 1 ? '' : 's'}` : `${cmp.pctDiff}% completion`;
+      lead = h('div', { class: 'lb-lead lose' }, `🔥 ${ch.friendName || 'Friend'} leads by ${by}`);
+    }
+    card.appendChild(lead);
+  }
+
+  // Footer: last synced + sync button
+  const foot = h('div', { class: 'lb-foot' });
+  foot.appendChild(h('span', { class: 'lb-synced' }, isActive ? `Synced ${LB.timeAgo(ch.lastSyncedAt)}` : 'Waiting for them to accept'));
+  if (isActive) {
+    const syncBtn = h('button', { class: 'btn small btn-primary' }, '🔄 Sync');
+    syncBtn.disabled = !mine;
+    syncBtn.addEventListener('click', () => openSyncShareModal(ch));
+    foot.appendChild(syncBtn);
+  } else {
+    const resend = h('button', { class: 'btn small' }, '↗ Resend invite');
+    resend.addEventListener('click', () => shareInvite(ch));
+    foot.appendChild(resend);
+  }
+  card.appendChild(foot);
+
+  // Tap header area opens a small menu (remove challenge)
+  card.appendChild(buildChallengeMenu(ch));
+  return card;
+}
+
+function scoreCol(label, streak, pct, done, known, leading) {
+  return h('div', { class: 'lb-col' + (leading ? ' leading' : '') },
+    h('div', { class: 'lb-col-name' }, label),
+    h('div', { class: 'lb-streak' }, known ? `${streak}` : '—', h('span', { class: 'lb-fire' }, known ? ' 🔥' : '')),
+    h('div', { class: 'lb-col-sub' }, known ? `${pct}% · ${done} day${done === 1 ? '' : 's'}` : 'no data yet'));
+}
+
+function buildChallengeMenu(ch) {
+  const row = h('div', { class: 'lb-card-actions' });
+  const del = h('button', { class: 'btn small danger' }, 'Remove');
+  del.addEventListener('click', () => {
+    confirmDialog(`Remove challenge with ${ch.friendName || 'this friend'}?`,
+      'This deletes the local challenge record. Your habit and its history are untouched.',
+      async () => {
+        await db.delete('challenges', ch.id);
+        state.challenges = state.challenges.filter((c) => c.id !== ch.id);
+        toast('Challenge removed');
+        render();
+      });
+  });
+  row.appendChild(del);
+  return row;
+}
+
+// Tiny confirm dialog reused by leaderboard (matches app modal style).
+function confirmDialog(title, msg, onYes) {
+  const body = h('div', null, h('p', { class: 'muted small' }, msg));
+  const yes = h('button', { class: 'btn btn-primary wide danger' }, 'Remove');
+  yes.addEventListener('click', () => { closeModal(); onYes(); });
+  const no = h('button', { class: 'btn wide' }, 'Cancel');
+  no.addEventListener('click', closeModal);
+  openModal(title, body, [yes, no]);
+}
+
+// ----- Invite flow ----------------------------------------------------------
+function openInviteModal() {
+  const habits = activeHabits();
+  if (!habits.length) { toast('Add a habit first, then invite a friend'); return; }
+
+  const body = h('div', { class: 'lb-form' });
+
+  // My name (required for the invite) — only ask if not already set.
+  let nameField = null;
+  if (!state.settings.userName) {
+    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name', maxlength: '30' });
+    body.appendChild(formRow('Your name', nameField));
+  }
+
+  const habitSel = h('select', { class: 'field' },
+    ...habits.map((hb) => h('option', { value: hb.id }, `${hb.icon || '✅'}  ${hb.name}`)));
+  body.appendChild(formRow('Habit to challenge', habitSel));
+
+  const friendName = h('input', { class: 'field', type: 'text', placeholder: "Friend's name", maxlength: '30' });
+  const friendPhone = h('input', { class: 'field', type: 'tel', placeholder: 'WhatsApp number (with country code)', maxlength: '20' });
+  const phoneWrap = h('div', { class: 'lb-phone-wrap' }, friendPhone);
+  if ('contacts' in navigator && navigator.contacts && navigator.contacts.select) {
+    const pick = h('button', { class: 'btn small', type: 'button' }, '📇 Pick');
+    pick.addEventListener('click', () => pickContact(friendName, friendPhone));
+    phoneWrap.appendChild(pick);
+  }
+  body.appendChild(formRow("Friend's name", friendName));
+  body.appendChild(formRow('WhatsApp number', phoneWrap, 'Optional — leave blank to choose the chat in WhatsApp.'));
+
+  const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & open WhatsApp');
+  create.addEventListener('click', async () => {
+    if (nameField) {
+      const n = nameField.value.trim();
+      if (!n) { toast('Enter your name'); nameField.focus(); return; }
+      state.settings.userName = n; await setSetting('userName', n);
+    }
+    const fname = friendName.value.trim();
+    if (!fname) { toast("Enter your friend's name"); friendName.focus(); return; }
+    const hb = state.habits.find((x) => x.id === habitSel.value);
+    if (!hb) { toast('Pick a habit'); return; }
+
+    const ch = {
+      id: uid(), status: 'pending', role: 'inviter',
+      habitId: hb.id, habitName: hb.name,
+      friendName: fname, friendPhone: friendPhone.value.trim(),
+      startDate: M.todayStr(), createdAt: Date.now(),
+      theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+    };
+    await persistChallenge(ch);
+    closeModal();
+    shareInvite(ch);
+    setView('leaderboard');
+  });
+
+  openModal('Invite a friend', body, [create]);
+}
+
+function shareInvite(ch) {
+  const payload = LB.buildInvite({
+    challengeId: ch.id, habitName: ch.habitName,
+    inviterName: state.settings.userName, inviterPhone: state.settings.userPhone,
+    startDate: ch.startDate,
+  });
+  const link = deepLink('invite', payload);
+  const text = `${state.settings.userName || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! 🌱\n\nTap to accept:\n${link}`;
+  openWhatsApp(ch.friendPhone, text);
+}
+
+async function pickContact(nameInput, phoneInput) {
+  try {
+    const sel = await navigator.contacts.select(['name', 'tel'], { multiple: false });
+    if (sel && sel[0]) {
+      if (sel[0].name && sel[0].name[0] && nameInput) nameInput.value = sel[0].name[0];
+      if (sel[0].tel && sel[0].tel[0] && phoneInput) phoneInput.value = sel[0].tel[0];
+    }
+  } catch (e) { /* user cancelled or unsupported */ }
+}
+
+// ----- Accept flow -----------------------------------------------------------
+function openAcceptModal(invite) {
+  // Already linked? Don't duplicate.
+  if (findChallenge(invite.challengeId)) {
+    setView('leaderboard');
+    toast('You’re already in this challenge');
+    return;
+  }
+  const habits = activeHabits();
+  const body = h('div', { class: 'lb-form' });
+  body.appendChild(h('div', { class: 'lb-invite-banner' },
+    h('div', { class: 'lb-avatar big' }, (invite.inviterName || '?').charAt(0).toUpperCase() || '?'),
+    h('div', null,
+      h('div', { class: 'lb-friend-name' }, `${invite.inviterName || 'A friend'} invited you`),
+      h('div', { class: 'lb-habit' }, `“${invite.habitName}” challenge · starts ${invite.startDate}`))));
+
+  let nameField = null;
+  if (!state.settings.userName) {
+    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name', maxlength: '30' });
+    body.appendChild(formRow('Your name', nameField));
+  }
+
+  let habitSel = null;
+  if (habits.length) {
+    // Default to a same-named habit if one exists.
+    const match = habits.find((hb) => hb.name.toLowerCase() === (invite.habitName || '').toLowerCase());
+    habitSel = h('select', { class: 'field' },
+      ...habits.map((hb) => h('option', { value: hb.id, selected: match && hb.id === match.id ? true : undefined }, `${hb.icon || '✅'}  ${hb.name}`)));
+    body.appendChild(formRow('Link to your habit', habitSel,
+      'The challenge tracks this habit on your side, counting only from the start date.'));
+  } else {
+    body.appendChild(h('p', { class: 'lb-warn' }, 'You have no habits yet. Add one first, then re-open the invite link.'));
+  }
+
+  const accept = h('button', { class: 'btn btn-primary wide' }, '✅ Accept challenge');
+  accept.disabled = !habits.length;
+  accept.addEventListener('click', async () => {
+    if (nameField) {
+      const n = nameField.value.trim();
+      if (!n) { toast('Enter your name'); nameField.focus(); return; }
+      state.settings.userName = n; await setSetting('userName', n);
+    }
+    const ch = {
+      id: invite.challengeId, status: 'active', role: 'invitee',
+      habitId: habitSel.value, habitName: invite.habitName,
+      friendName: invite.inviterName || 'Friend', friendPhone: invite.inviterPhone,
+      startDate: invite.startDate, createdAt: Date.now(),
+      theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+    };
+    await persistChallenge(ch);
+    closeModal();
+    // Send acceptance back so the inviter's challenge goes active.
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: state.settings.userName, accepterPhone: state.settings.userPhone });
+    const link = deepLink('accept', payload);
+    const text = `I accepted your "${ch.habitName}" challenge — game on! 🔥\n\nTap to add me to your leaderboard:\n${link}`;
+    openWhatsApp(ch.friendPhone, text);
+    setView('leaderboard');
+    toast('Challenge accepted!', { celebrate: true });
+  });
+  const decline = h('button', { class: 'btn wide' }, 'Decline');
+  decline.addEventListener('click', closeModal);
+
+  openModal('Challenge invite', body, [accept, decline]);
+}
+
+// Inviter receives the acceptance → mark their pending challenge active.
+function handleAccept(accept) {
+  const ch = findChallenge(accept.challengeId);
+  if (!ch) { toast('Challenge not found on this device'); return; }
+  ch.status = 'active';
+  if (accept.accepterName) ch.friendName = accept.accepterName;
+  if (accept.accepterPhone) ch.friendPhone = accept.accepterPhone;
+  persistChallenge(ch).then(() => {
+    setView('leaderboard');
+    toast(`${ch.friendName} accepted your challenge!`, { celebrate: true });
+  });
+}
+
+// ----- Sync flow -------------------------------------------------------------
+function openSyncShareModal(ch) {
+  const mine = myChallengeStats(ch);
+  if (!mine) { toast('Linked habit is missing'); return; }
+  const body = h('div', { class: 'lb-form' });
+  body.appendChild(h('div', { class: 'lb-sync-preview' },
+    h('div', { class: 'lb-habit' }, `${ch.habitName} · with ${ch.friendName}`),
+    h('div', { class: 'lb-sync-stats' },
+      statPill('Streak', `${mine.streak} 🔥`),
+      statPill('Completion', `${mine.pct}%`),
+      statPill('Days', `${mine.done}`))));
+  body.appendChild(h('p', { class: 'muted small' }, 'Sends your current numbers as a WhatsApp link. Your friend taps it to update their leaderboard.'));
+
+  const send = h('button', { class: 'btn btn-primary wide' }, '📲 Send via WhatsApp');
+  send.addEventListener('click', async () => {
+    const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
+    const link = deepLink('sync', payload);
+    const text = `My "${ch.habitName}" challenge update: ${mine.streak}🔥 streak, ${mine.pct}% done.\n\nTap to update your leaderboard:\n${link}`;
+    ch.lastSentAt = Date.now();
+    await persistChallenge(ch);
+    closeModal();
+    openWhatsApp(ch.friendPhone, text);
+  });
+  openModal('Sync progress', body, [send]);
+}
+
+// Recipient opens a sync link → import friend's stats, then offer to send back.
+function handleSyncReceive(sync) {
+  const ch = findChallenge(sync.challengeId);
+  if (!ch) { toast('No matching challenge for this sync link'); return; }
+  // Ignore stale syncs (out-of-order links).
+  if (sync.ts && ch.lastSyncedAt && sync.ts < ch.lastSyncedAt) {
+    setView('leaderboard');
+    toast('Already have newer progress from them');
+    return;
+  }
+  ch.theirStreak = sync.streak;
+  ch.theirPct = sync.pct;
+  ch.theirDays = sync.days;
+  ch.lastSyncedAt = sync.ts || Date.now();
+  persistChallenge(ch).then(() => {
+    setView('leaderboard');
+    // Success + offer to reply with my own progress.
+    const body = h('div', null,
+      h('p', null, `Updated ${ch.friendName}'s progress: ${sync.streak}🔥 streak, ${sync.pct}% done.`),
+      h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'Send your latest progress back so they stay up to date too?'));
+    const sendBack = h('button', { class: 'btn btn-primary wide' }, '📲 Send my update');
+    sendBack.addEventListener('click', () => { closeModal(); openSyncShareModal(ch); });
+    const later = h('button', { class: 'btn wide' }, 'Later');
+    later.addEventListener('click', closeModal);
+    openModal('Progress received ✓', body, [sendBack, later]);
+  });
+}
+
+// ----- Deep-link router (called from boot) ----------------------------------
+function handleLeaderboardLink(params) {
+  const raw = params.get('invite') || params.get('accept') || params.get('sync');
+  if (!raw) return;
+  const payload = LB.decodePayload(raw);
+  // Scrub the URL so a reload doesn't replay the action.
+  history.replaceState({}, document.title, location.pathname);
+  if (!payload) { toast('That leaderboard link looks invalid'); return; }
+
+  if (params.has('invite')) {
+    const invite = LB.parseInvite(payload);
+    if (invite) { setView('leaderboard'); openAcceptModal(invite); } else toast('Invalid invite link');
+  } else if (params.has('accept')) {
+    const accept = LB.parseAccept(payload);
+    if (accept) handleAccept(accept); else toast('Invalid acceptance link');
+  } else if (params.has('sync')) {
+    const sync = LB.parseSync(payload);
+    if (sync) handleSyncReceive(sync); else toast('Invalid sync link');
+  }
+}
+
+// Small form/layout helpers for leaderboard modals.
+function formRow(label, control, hint) {
+  return h('div', { class: 'lb-field' },
+    h('label', { class: 'lb-label' }, label),
+    control,
+    hint ? h('div', { class: 'setting-hint' }, hint) : null);
+}
+function statPill(label, value) {
+  return h('div', { class: 'lb-pill' }, h('div', { class: 'lb-pill-v' }, value), h('div', { class: 'lb-pill-l' }, label));
+}
+
 function openModal(title, body, footerKids = [], onClose) {
   const root = $('#modal-root');
   const sheet = h('div', { class: 'sheet' },
@@ -2651,8 +3074,12 @@ async function boot() {
   }
 
   const start = params.get('view') || 'today';
-  setView(['today', 'tracker', 'stats', 'insights', 'habits', 'settings'].includes(start) ? start : 'today');
+  setView(['today', 'tracker', 'stats', 'insights', 'leaderboard', 'habits', 'settings'].includes(start) ? start : 'today');
   if (params.get('action') === 'add') openEditor();
+
+  // Leaderboard deep links (shared over WhatsApp). Decode, route to the right
+  // flow, then scrub the URL so a reload doesn't re-trigger it.
+  handleLeaderboardLink(params);
 
   // First-run: no habits AND no name → full onboarding. After it closes, the
   // app keeps running normally.

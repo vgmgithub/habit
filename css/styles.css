@@ -950,3 +950,68 @@ h1, h2, h3, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 @media (min-width: 680px) { .tabbar { border-radius: 16px 16px 0 0; left: 50%; transform: translateX(-50%); max-width: var(--maxw); } }
 @media (max-width: 380px) { .lib-grid { grid-template-columns: 1fr; } }
+
+/* ===== Leaderboard ===== */
+.lb-intro { margin: 2px 2px 14px; }
+.lb-list { display: flex; flex-direction: column; gap: 12px; }
+
+.lb-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow);
+}
+.lb-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lb-friend { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lb-avatar {
+  width: 38px; height: 38px; flex: none; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 1.05rem; color: #fff;
+  background: var(--accent);
+}
+.lb-avatar.big { width: 46px; height: 46px; font-size: 1.25rem; }
+.lb-friend-name { font-weight: 700; font-size: 1.02rem; letter-spacing: -0.01em; }
+.lb-habit { font-size: 0.82rem; color: var(--text-dim); margin-top: 1px; }
+.lb-badge {
+  flex: none; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 3px 8px; border-radius: 999px;
+}
+.lb-badge.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.lb-badge.pending { background: var(--card-2); color: var(--text-faint); }
+
+.lb-warn { font-size: 0.82rem; color: #f59e0b; margin-top: 8px; }
+
+.lb-score { display: flex; align-items: stretch; gap: 8px; margin: 14px 0 4px; }
+.lb-col {
+  flex: 1; text-align: center; padding: 12px 6px; border-radius: var(--radius-sm);
+  background: var(--card-2); border: 1px solid transparent;
+}
+.lb-col.leading { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, var(--card-2)); }
+.lb-col-name { font-size: 0.8rem; color: var(--text-dim); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-streak { font-size: 1.7rem; font-weight: 800; letter-spacing: -0.02em; margin: 2px 0; }
+.lb-fire { font-size: 1rem; }
+.lb-col-sub { font-size: 0.74rem; color: var(--text-faint); }
+.lb-vs { display: flex; align-items: center; font-size: 0.78rem; color: var(--text-faint); font-weight: 700; }
+
+.lb-lead { text-align: center; font-size: 0.9rem; font-weight: 700; margin: 8px 0 2px; }
+.lb-lead.win { color: var(--accent); }
+.lb-lead.lose { color: #f59e0b; }
+.lb-lead.tie, .lb-lead.muted { color: var(--text-dim); font-weight: 600; }
+
+.lb-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.lb-synced { font-size: 0.78rem; color: var(--text-faint); }
+.lb-card-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* Leaderboard modals */
+.lb-form { display: flex; flex-direction: column; gap: 14px; }
+.lb-field { display: flex; flex-direction: column; gap: 6px; }
+.lb-label { font-size: 0.82rem; font-weight: 700; color: var(--text-dim); }
+.lb-phone-wrap { display: flex; gap: 8px; align-items: center; }
+.lb-phone-wrap .field { flex: 1; }
+select.field { -webkit-appearance: none; appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-faint) 50%), linear-gradient(135deg, var(--text-faint) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
+
+.lb-invite-banner { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--card-2); border-radius: var(--radius-sm); }
+
+.lb-sync-preview { padding: 12px; background: var(--card-2); border-radius: var(--radius-sm); }
+.lb-sync-stats { display: flex; gap: 8px; margin-top: 10px; }
+.lb-pill { flex: 1; text-align: center; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 6px; }
+.lb-pill-v { font-size: 1.15rem; font-weight: 800; }
+.lb-pill-l { font-size: 0.72rem; color: var(--text-faint); margin-top: 2px; }

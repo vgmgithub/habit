@@ -3,7 +3,7 @@
 // network fallback that refreshes the cache. All habit DATA lives in IndexedDB
 // (handled by the page), so the SW only needs to cache the static shell.
 
-const CACHE = 'habits-v26';
+const CACHE = 'habits-v27';
 const ASSETS = [
   './',
   './index.html',
@@ -14,6 +14,7 @@ const ASSETS = [
   './js/model.js',
   './js/quotes.js',
   './js/backup.js',
+  './js/leaderboard.js',
   './icons/favicon.png',
   './icons/icon-192.png',
   './icons/icon-512.png',

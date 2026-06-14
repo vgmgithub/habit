@@ -12,18 +12,23 @@ import * as M from './model.js';
 // ---------------------------------------------------------------------------
 // Compact payload schema (short keys → short links). Documented map:
 //   t  = type            'i' invite | 'a' accept | 's' sync
-//   v  = schema version  (currently 1)
+//   v  = schema version  (currently 2)
 //   c  = challenge id     (shared key both devices agree on)
 //   h  = habit name       (the challenge's habit, for display/matching)
 //   n  = sender name
 //   p  = sender phone     (digits only; may be empty)
 //   d  = start date       'YYYY-MM-DD' (canonical challenge start)
+//   dr = duration (days)  (invite/accept)
+//   b  = badge           (invite — reputation badge: 'elite' | 'reliable' | 'active' | 'casual')
+//   w  = wins            (invite — count of won challenges)
+//   l  = losses          (invite — count of lost challenges)
+//   ac = active count    (invite — current active challenges)
 //   st = challenge streak (sync)
 //   pc = completion %     (sync)
 //   dy = completed days   (sync)
 //   ts = timestamp (ms)   (sync — for out-of-order detection)
 // ---------------------------------------------------------------------------
-export const PAYLOAD_VERSION = 1;
+export const PAYLOAD_VERSION = 2;
 
 // Supported challenge durations (days). Creator picks one at invite time.
 export const DURATIONS = [7, 15, 30];
@@ -34,6 +39,64 @@ export function normDuration(d) {
   const n = d | 0;
   return DURATIONS.indexOf(n) >= 0 ? n : 7;
 }
+
+// ---------------------------------------------------------------------------
+// Badge system: editable thresholds for reputation tiers (Phase B).
+// Modify thresholds here; they apply immediately without touching stored data.
+// ---------------------------------------------------------------------------
+export const BADGE_THRESHOLDS = {
+  elite: { completionRate: 0.90, wins: 10 },      // 90%+ completion, 10+ wins
+  reliable: { completionRate: 0.75, wins: 5 },    // 75%+ completion, 5+ wins
+  active: { challengesStarted: 5 },                // 5+ challenges started
+  casual: { challengesStarted: 0 },                // Everyone gets casual as fallback
+};
+
+// Derive all reputation metrics from local challenges. Pass full state.challenges
+// and return { started, completed, completionRate, wins, losses, draws, active, bestStreak }
+export function reputationMetrics(allChallenges) {
+  const completed = allChallenges.filter((c) => c.status === 'completed' || c.resultsLocked).length;
+  const started = allChallenges.length;
+  const active = allChallenges.filter((c) => c.status === 'active').length;
+  const completionRate = started > 0 ? completed / started : 0;
+
+  let wins = 0, losses = 0, draws = 0, bestStreak = 0;
+  allChallenges.forEach((ch) => {
+    if (ch.resultsLocked && ch.result) {
+      const r = ch.result;
+      if (r.winner === 'me') wins++;
+      else if (r.winner === 'them') losses++;
+      else if (r.winner === 'tie') draws++;
+      // Best streak is the max mine.streak we achieved in any challenge
+      bestStreak = Math.max(bestStreak, (r.mine && r.mine.streak) || 0);
+    }
+  });
+
+  return { started, completed, completionRate, wins, losses, draws, active, bestStreak };
+}
+
+// Determine badge tier from metrics. Returns one of: 'elite', 'reliable', 'active', 'casual'
+export function badgeFor(metrics) {
+  const { completionRate, wins, started } = metrics;
+  // Tiebreak: elite > reliable > active > casual
+  if (completionRate >= BADGE_THRESHOLDS.elite.completionRate && wins >= BADGE_THRESHOLDS.elite.wins) {
+    return 'elite';
+  }
+  if (completionRate >= BADGE_THRESHOLDS.reliable.completionRate && wins >= BADGE_THRESHOLDS.reliable.wins) {
+    return 'reliable';
+  }
+  if (started >= BADGE_THRESHOLDS.active.challengesStarted) {
+    return 'active';
+  }
+  return 'casual';
+}
+
+// Badge display info: text, emoji, color
+export const BADGE_INFO = {
+  elite: { text: 'Elite Challenger', emoji: '🏆', color: '#f59e0b' },
+  reliable: { text: 'Reliable Challenger', emoji: '⭐', color: '#3b82f6' },
+  active: { text: 'Active Challenger', emoji: '👍', color: '#10b981' },
+  casual: { text: 'Casual Challenger', emoji: '🤝', color: '#6b7280' },
+};
 
 // ----- URL-safe base64 encode/decode (UTF-8 safe for unicode names) ---------
 export function encodePayload(obj) {
@@ -53,13 +116,23 @@ export function decodePayload(str) {
 }
 
 // ----- Builders: friendly args → compact payload ----------------------------
-export function buildInvite({ challengeId, habitName, inviterName, inviterPhone, startDate, durationDays }) {
-  return { t: 'i', v: PAYLOAD_VERSION, c: challengeId, h: habitName || '', n: inviterName || '', p: digits(inviterPhone), d: startDate, dr: normDuration(durationDays) };
+export function buildInvite({ challengeId, habitName, inviterName, inviterPhone, startDate, durationDays, badge, wins, losses, active }) {
+  // PRIVACY: never send completion %. Only badge + wins/losses/active.
+  return {
+    t: 'i', v: PAYLOAD_VERSION, c: challengeId,
+    h: habitName || '', n: inviterName || '', p: digits(inviterPhone), d: startDate, dr: normDuration(durationDays),
+    b: badge || 'casual', w: wins | 0, l: losses | 0, ac: active | 0,
+  };
 }
-export function buildAccept({ challengeId, accepterName, accepterPhone, habitName, startDate, durationDays }) {
+export function buildAccept({ challengeId, accepterName, accepterPhone, habitName, startDate, durationDays, badge, wins, losses, active }) {
   // habitName (h) + startDate (d) + duration (dr) echoed back from invite so
-  // inviter can REBUILD if their local pending copy was lost.
-  return { t: 'a', v: PAYLOAD_VERSION, c: challengeId, n: accepterName || '', p: digits(accepterPhone), h: habitName || '', d: startDate || '', dr: normDuration(durationDays) };
+  // inviter can REBUILD if their local pending copy was lost. Also include
+  // accepter's badge + reputation for mutual visibility.
+  return {
+    t: 'a', v: PAYLOAD_VERSION, c: challengeId,
+    n: accepterName || '', p: digits(accepterPhone), h: habitName || '', d: startDate || '', dr: normDuration(durationDays),
+    b: badge || 'casual', w: wins | 0, l: losses | 0, ac: active | 0,
+  };
 }
 export function buildSync({ challengeId, streak, pct, days, ts }) {
   // NOTE: ts is a ms timestamp (>2^31) — never use `| 0`, which truncates to 32-bit.
@@ -69,11 +142,19 @@ export function buildSync({ challengeId, streak, pct, days, ts }) {
 // ----- Parsers: compact payload → friendly object (null if malformed) -------
 export function parseInvite(p) {
   if (!p || p.t !== 'i' || !p.c) return null;
-  return { challengeId: p.c, habitName: p.h || '', inviterName: p.n || '', inviterPhone: digits(p.p), startDate: p.d || M.todayStr(), durationDays: normDuration(p.dr) };
+  return {
+    challengeId: p.c, habitName: p.h || '', inviterName: p.n || '', inviterPhone: digits(p.p),
+    startDate: p.d || M.todayStr(), durationDays: normDuration(p.dr),
+    badge: p.b || 'casual', wins: p.w | 0, losses: p.l | 0, active: p.ac | 0,
+  };
 }
 export function parseAccept(p) {
   if (!p || p.t !== 'a' || !p.c) return null;
-  return { challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p), habitName: p.h || '', startDate: p.d || '', durationDays: normDuration(p.dr) };
+  return {
+    challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p), habitName: p.h || '',
+    startDate: p.d || '', durationDays: normDuration(p.dr),
+    badge: p.b || 'casual', wins: p.w | 0, losses: p.l | 0, active: p.ac | 0,
+  };
 }
 export function parseSync(p) {
   if (!p || p.t !== 's' || !p.c) return null;

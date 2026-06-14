@@ -2157,6 +2157,15 @@ function myChallengeStats(ch) {
   return LB.challengeStats(habit, logsFor(ch.habitId), ch.startDate, M.todayStr());
 }
 
+// Phase B: Get my reputation metrics from all challenges.
+function myReputationMetrics() {
+  return LB.reputationMetrics(state.challenges);
+}
+function myBadge() {
+  const metrics = myReputationMetrics();
+  return LB.badgeFor(metrics);
+}
+
 // Phase A: Auto-reconcile challenge lifecycle — lock and snapshot results for
 // expired/ended challenges. Run on boot and before rendering leaderboard.
 function reconcileChallenges(today = M.todayStr()) {
@@ -2207,6 +2216,21 @@ function renderLeaderboard() {
   const codeBtn = h('button', { class: 'btn wide' }, '📥 I have a code');
   codeBtn.addEventListener('click', openPasteCodeModal);
   root.appendChild(codeBtn);
+
+  // Phase B: Your reputation card
+  const metrics = myReputationMetrics();
+  const badge = myBadge();
+  const badgeInfo = LB.BADGE_INFO[badge];
+  root.appendChild(h('div', { class: 'lb-reputation-card', style: { marginTop: '20px', padding: '14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' } },
+      h('div', { style: { fontSize: '1.5rem' } }, badgeInfo.emoji),
+      h('div', null,
+        h('div', { style: { fontWeight: '700', fontSize: '0.95rem' } }, badgeInfo.text),
+        h('div', { class: 'muted small' }, `${metrics.started} challenges started, ${metrics.completed} completed`))),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '0.85rem', textAlign: 'center', marginTop: '10px' } },
+      h('div', null, h('div', { class: 'muted small' }, 'Wins'), h('div', { style: { fontWeight: '700', fontSize: '1.1rem' } }, metrics.wins)),
+      h('div', null, h('div', { class: 'muted small' }, 'Losses'), h('div', { style: { fontWeight: '700', fontSize: '1.1rem' } }, metrics.losses)),
+      h('div', null, h('div', { class: 'muted small' }, 'Completion'), h('div', { style: { fontWeight: '700', fontSize: '1.1rem' } }, `${Math.round(metrics.completionRate * 100)}%`)))));
 
   // Categorize challenges by status
   const active = state.challenges.filter((c) => c.status === 'active');
@@ -2426,7 +2450,10 @@ function openInviteModal() {
     };
 
     // Build share text synchronously — no await yet, gesture is live.
-    const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate, durationDays });
+    // Include badge + reputation (wins/losses/active) — never completion %.
+    const metrics = myReputationMetrics();
+    const badge = LB.badgeFor(metrics);
+    const payload = LB.buildInvite({ challengeId: ch.id, habitName: hb.name, inviterName: myName, startDate, durationDays, badge, wins: metrics.wins, losses: metrics.losses, active: metrics.active });
     const link = deepLink('invite', payload);
     const text = `${myName || 'A friend'} challenged you to a "${hb.name}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
 
@@ -2448,7 +2475,9 @@ function openInviteModal() {
 async function shareInvite(ch) {
   const name = state.settings.userName || '';
   const durationDays = ch.durationDays || 7;
-  const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate, durationDays });
+  const metrics = myReputationMetrics();
+  const badge = LB.badgeFor(metrics);
+  const payload = LB.buildInvite({ challengeId: ch.id, habitName: ch.habitName, inviterName: name, startDate: ch.startDate, durationDays, badge, wins: metrics.wins, losses: metrics.losses, active: metrics.active });
   const link = deepLink('invite', payload);
   const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to accept. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
   await shareLink(text);
@@ -2478,11 +2507,14 @@ function openAcceptModal(invite) {
   const endDate = LB.computeEndDate(invite.startDate, durationDays);
 
   const body = h('div', { class: 'lb-form' });
+  // Show inviter's badge + reputation
+  const badgeInfo = LB.BADGE_INFO[invite.badge || 'casual'];
   body.appendChild(h('div', { class: 'lb-invite-banner' },
     h('div', { class: 'lb-avatar big' }, (invite.inviterName || '?').charAt(0).toUpperCase() || '?'),
     h('div', null,
       h('div', { class: 'lb-friend-name' }, `${invite.inviterName || 'A friend'} invited you`),
-      h('div', { class: 'lb-habit' }, `”${invite.habitName}” · ${durationDays} days (${invite.startDate} to ${endDate})`))));
+      h('div', { class: 'lb-habit' }, `”${invite.habitName}” · ${durationDays} days (${invite.startDate} to ${endDate})`),
+      h('div', { class: 'muted small', style: { marginTop: '6px' } }, `${badgeInfo.emoji} ${badgeInfo.text} · ${invite.wins || 0} wins, ${invite.losses || 0} losses, ${invite.active || 0} active`))));
 
   // First option creates a brand-new habit; the rest link an existing one. This
   // means accepting is NEVER a dead-end, even if you don't track this habit yet.
@@ -2507,6 +2539,7 @@ function openAcceptModal(invite) {
     } else {
       habitId = habitSel.value;
     }
+    // Store inviter's badge + reputation for display
     const ch = {
       id: invite.challengeId, status: 'active', role: 'invitee',
       habitId, habitName: invite.habitName,
@@ -2514,10 +2547,14 @@ function openAcceptModal(invite) {
       startDate: invite.startDate, endDate, durationDays, type: 'h2h', createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
       resultsLocked: false, seenCelebration: false,
+      inviterBadge: invite.badge || 'casual', inviterWins: invite.wins || 0, inviterLosses: invite.losses || 0, inviterActive: invite.active || 0,
     };
     // Send acceptance back FIRST (synchronously, in-gesture) so the inviter's
     // challenge goes active — mobile blocks window.open after an await.
-    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate, durationDays });
+    // Include my own badge + reputation.
+    const myMetrics = myReputationMetrics();
+    const myBadge = LB.badgeFor(myMetrics);
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, habitName: ch.habitName, startDate: ch.startDate, durationDays, badge: myBadge, wins: myMetrics.wins, losses: myMetrics.losses, active: myMetrics.active });
     const link = deepLink('accept', payload);
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\n${link}\n\nTap the link to add me. On iPhone, if it doesn't open: open Habits → "I have a code" → paste the link.`;
     // Create habit + challenge and render FIRST (sync state, background writes),
@@ -2556,11 +2593,17 @@ function handleAccept(accept) {
       startDate, endDate, durationDays, type: 'h2h', createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
       resultsLocked: false, seenCelebration: false,
+      accepterBadge: accept.badge || 'casual', accepterWins: accept.wins || 0, accepterLosses: accept.losses || 0, accepterActive: accept.active || 0,
     };
   } else {
     ch.status = 'active';
     if (accept.accepterName) ch.friendName = accept.accepterName;
     if (accept.accepterPhone) ch.friendPhone = accept.accepterPhone;
+    // Store accepter's badge + reputation
+    ch.accepterBadge = accept.badge || 'casual';
+    ch.accepterWins = accept.wins || 0;
+    ch.accepterLosses = accept.losses || 0;
+    ch.accepterActive = accept.active || 0;
     // Backfill duration if missing
     if (!ch.endDate) {
       ch.startDate = ch.startDate || startDate;

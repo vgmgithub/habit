@@ -313,3 +313,85 @@ export function getEndStats(habit, logs, challenge) {
   const endDate = challenge.endDate || computeEndDate(challenge.startDate, challenge.durationDays);
   return challengeStats(habit, logs, challenge.startDate, endDate);
 }
+
+// ---------------------------------------------------------------------------
+// Phase C: Friend profiles, insights, milestones, sync health
+// ---------------------------------------------------------------------------
+
+// Aggregate stats for one friend across all challenges.
+// Returns { active, completed, wins, losses, bestStreak, badge, wins, losses, active }
+export function friendProfileStats(friendName, allChallenges) {
+  const withFriend = allChallenges.filter(
+    (c) => (c.friendName || '').toLowerCase() === (friendName || '').toLowerCase()
+  );
+
+  const active = withFriend.filter((c) => c.status === 'active').length;
+  const completed = withFriend.filter((c) => c.status === 'completed').length;
+  let wins = 0, losses = 0, bestStreak = 0;
+
+  withFriend.forEach((ch) => {
+    if (ch.resultsLocked && ch.result) {
+      const r = ch.result;
+      if (r.winner === 'me') wins++;
+      else if (r.winner === 'them') losses++;
+      bestStreak = Math.max(bestStreak, (r.mine && r.mine.streak) || 0);
+    }
+  });
+
+  return { active, completed, wins, losses, bestStreak };
+}
+
+// Generate a motivational insight for the current challenge state.
+export function motivationalInsight(mine, theirs, myName, friendName) {
+  const myStreak = (mine && mine.streak) | 0;
+  const theirStreak = (theirs && theirs.streak) | 0;
+  const myPct = (mine && mine.pct) | 0;
+  const theirPct = (theirs && theirs.pct) | 0;
+
+  if (myStreak > theirStreak) {
+    const diff = myStreak - theirStreak;
+    return `You're ahead by ${diff} day${diff === 1 ? '' : 's'} — keep it up!`;
+  }
+  if (theirStreak > myStreak) {
+    const diff = theirStreak - myStreak;
+    return `${friendName || 'They'} is ahead by ${diff} day${diff === 1 ? '' : 's'} — you can catch up!`;
+  }
+  if (myPct > theirPct) {
+    const diff = myPct - theirPct;
+    return `You're leading by ${diff}% completion — finish strong!`;
+  }
+  if (theirPct > myPct) {
+    const diff = theirPct - myPct;
+    return `Just ${diff}% behind on completion — one more day could flip it!`;
+  }
+  return '🤝 Neck and neck — keep going!';
+}
+
+// Check for shared milestone achievements.
+// Returns array of strings like "Both hit 7-day streak", "Both >90% completion"
+export function sharedMilestones(mine, theirs) {
+  const milestones = [];
+  const myStreak = (mine && mine.streak) | 0;
+  const theirStreak = (theirs && theirs.streak) | 0;
+  const myPct = (mine && mine.pct) | 0;
+  const theirPct = (theirs && theirs.pct) | 0;
+
+  if (myStreak >= 7 && theirStreak >= 7) milestones.push('Both hit 7-day streak');
+  if (myStreak >= 15 && theirStreak >= 15) milestones.push('Both hit 15-day streak');
+  if (myStreak >= 30 && theirStreak >= 30) milestones.push('Both hit 30-day streak');
+  if (myPct >= 90 && theirPct >= 90) milestones.push('Both >90% completion');
+
+  return milestones;
+}
+
+// Sync health status: how fresh is the friend's data?
+// Returns { status: 'green' | 'yellow' | 'red', label: string }
+export function syncHealthStatus(lastSyncedAt, now = Date.now()) {
+  if (!lastSyncedAt || lastSyncedAt === 0) return { status: 'gray', label: 'never synced' };
+  const ms = now - lastSyncedAt;
+  const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+
+  if (days === 0) return { status: 'green', label: 'synced today' };
+  if (days <= 7) return { status: 'yellow', label: `${days}d ago` };
+  return { status: 'red', label: `${days}d ago` };
+}

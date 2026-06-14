@@ -1029,3 +1029,13 @@ select.field { -webkit-appearance: none; appearance: none; background-image: lin
 
 .lb-qr-container { display: flex; justify-content: center; align-items: center; padding: 16px; background: var(--card-2); border-radius: var(--radius-sm); }
 .lb-qr-container canvas { border: 2px solid var(--border); border-radius: var(--radius-sm); background: white; }
+
+/* Phase C: social — sync-health dot, shared milestone, tappable friend */
+.lb-friend.tappable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.lb-friend.tappable:active { opacity: 0.6; }
+.lb-sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 6px; vertical-align: middle; background: var(--text-faint); }
+.lb-sync-dot.green { background: #10b981; }
+.lb-sync-dot.yellow { background: #f59e0b; }
+.lb-sync-dot.red { background: #ef4444; }
+.lb-sync-dot.gray { background: var(--text-faint); }
+.lb-milestone { margin-top: 8px; padding: 8px 12px; background: #d1fae5; color: #047857; border-radius: var(--radius-sm); font-size: 0.82rem; font-weight: 700; text-align: center; }

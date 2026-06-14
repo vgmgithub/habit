@@ -319,7 +319,7 @@ export function getEndStats(habit, logs, challenge) {
 // ---------------------------------------------------------------------------
 
 // Aggregate stats for one friend across all challenges.
-// Returns { active, completed, wins, losses, bestStreak, badge, wins, losses, active }
+// Returns { active, completed, wins, losses, bestStreak }
 export function friendProfileStats(friendName, allChallenges) {
   const withFriend = allChallenges.filter(
     (c) => (c.friendName || '').toLowerCase() === (friendName || '').toLowerCase()

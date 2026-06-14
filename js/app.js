@@ -2283,9 +2283,9 @@ function challengeCard(ch) {
 
   const card = h('div', { class: 'lb-card' });
 
-  // Header: friend + status badge
+  // Header: friend (tap for profile) + status badge
   card.appendChild(h('div', { class: 'lb-head' },
-    h('div', { class: 'lb-friend' },
+    h('div', { class: 'lb-friend tappable', onclick: () => openFriendProfile(ch) },
       h('span', { class: 'lb-avatar' }, (ch.friendName || '?').trim().charAt(0).toUpperCase() || '?'),
       h('div', null,
         h('div', { class: 'lb-friend-name' }, ch.friendName || 'Friend'),
@@ -2320,11 +2320,27 @@ function challengeCard(ch) {
       lead = h('div', { class: 'lb-lead lose' }, `🔥 ${ch.friendName || 'Friend'} leads by ${by}`);
     }
     card.appendChild(lead);
+
+    // Shared milestones — celebrate when BOTH have hit the same threshold.
+    if (synced && mine) {
+      const milestones = LB.sharedMilestones(mine, theirs);
+      if (milestones.length) {
+        card.appendChild(h('div', { class: 'lb-milestone' },
+          '🎉 ' + milestones[milestones.length - 1]));
+      }
+    }
   }
 
-  // Footer: last synced + sync button
+  // Footer: last synced (with health dot) + sync button
   const foot = h('div', { class: 'lb-foot' });
-  foot.appendChild(h('span', { class: 'lb-synced' }, isActive ? `Synced ${LB.timeAgo(ch.lastSyncedAt)}` : 'Waiting for them to accept'));
+  if (isActive) {
+    const health = LB.syncHealthStatus(ch.lastSyncedAt || 0);
+    foot.appendChild(h('span', { class: 'lb-synced' },
+      h('span', { class: 'lb-sync-dot ' + health.status, title: health.label }),
+      synced ? `Synced ${LB.timeAgo(ch.lastSyncedAt)}` : 'Not synced yet'));
+  } else {
+    foot.appendChild(h('span', { class: 'lb-synced' }, 'Waiting for them to accept'));
+  }
   if (isActive) {
     const syncBtn = h('button', { class: 'btn small btn-primary' }, '🔄 Sync');
     syncBtn.disabled = !mine;
@@ -2616,6 +2632,52 @@ function handleAccept(accept) {
   persistChallenge(ch);
   setView('leaderboard');
   toast(`${ch.friendName} accepted your challenge!`, { celebrate: true });
+}
+
+// ----- Friend profile (Phase C) ---------------------------------------------
+// All-time head-to-head record with one friend, plus a motivational nudge for
+// the most recent active challenge with them.
+function openFriendProfile(ch) {
+  const friendName = ch.friendName || 'Friend';
+  const myName = state.settings.userName || '';
+  const stats = LB.friendProfileStats(friendName, state.challenges);
+
+  const body = h('div', { class: 'lb-form' });
+
+  // Header card: avatar + name + sync health
+  const health = LB.syncHealthStatus(ch.lastSyncedAt || 0);
+  body.appendChild(h('div', { class: 'lb-invite-banner' },
+    h('span', { class: 'lb-avatar' }, friendName.trim().charAt(0).toUpperCase() || '?'),
+    h('div', null,
+      h('div', { class: 'lb-friend-name' }, friendName),
+      h('div', { class: 'lb-habit' },
+        h('span', { class: 'lb-sync-dot ' + health.status }),
+        health.label))));
+
+  // All-time record pills
+  body.appendChild(h('div', { class: 'lb-sync-stats' },
+    statPill('Wins', `${stats.wins}`),
+    statPill('Losses', `${stats.losses}`),
+    statPill('Best 🔥', `${stats.bestStreak}`)));
+  body.appendChild(h('div', { class: 'lb-sync-stats' },
+    statPill('Active', `${stats.active}`),
+    statPill('Completed', `${stats.completed}`)));
+
+  // Motivational insight for THIS active challenge (only if synced)
+  if (ch.status === 'active' && ch.lastSyncedAt > 0) {
+    const mine = myChallengeStats(ch);
+    const theirs = { streak: ch.theirStreak | 0, pct: ch.theirPct | 0, done: ch.theirDays | 0 };
+    if (mine) {
+      const insight = LB.motivationalInsight(mine, theirs, myName, friendName);
+      body.appendChild(h('div', { class: 'lb-lead muted', style: { marginTop: '4px' } }, insight));
+    }
+  }
+
+  if (!stats.wins && !stats.losses && !stats.completed) {
+    body.appendChild(h('p', { class: 'muted small' }, 'No completed challenges yet — your record builds as challenges finish.'));
+  }
+
+  openModal(friendName, body, []);
 }
 
 // ----- Sync flow -------------------------------------------------------------

@@ -36,14 +36,21 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; padding: 0; height: 100%; }
+html { height: 100%; }
+body { margin: 0; padding: 0; }
 body {
+  /* App-shell layout: body does NOT scroll. App bar (top) + scrollable content
+     (middle) + tab bar (bottom) are flex children. This makes the tab bar a real
+     structural element — on iOS it can no longer float/ghost over content during
+     momentum scrolling (the position:fixed + backdrop-filter bug). */
+  height: 100vh; height: 100dvh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.45;
-  overscroll-behavior-y: none;
-  -webkit-overscroll-behavior-y: none;
+  overscroll-behavior: none;
   touch-action: manipulation;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
@@ -54,17 +61,10 @@ h1, h2, h3, p { margin: 0; }
 
 /* ----- App bar ----- */
 .appbar {
-  position: sticky; top: 0; z-index: 20;
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
-  backdrop-filter: saturate(160%) blur(12px);
-  -webkit-backdrop-filter: saturate(160%) blur(12px);
+  flex: 0 0 auto; z-index: 20;
+  background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   padding-top: env(safe-area-inset-top);
-  /* iOS: keep the bar on its own GPU layer so it doesn't leave a stale paint
-     mid-screen during momentum scrolling (backdrop-filter + fixed/sticky bug). */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  will-change: transform;
 }
 .appbar-inner {
   max-width: var(--maxw); margin: 0 auto;
@@ -73,27 +73,25 @@ h1, h2, h3, p { margin: 0; }
 }
 .appbar h1 { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.01em; }
 
-/* ----- Main scroll area ----- */
+/* ----- Main scroll area (the ONLY thing that scrolls) ----- */
 .app {
-  max-width: var(--maxw); margin: 0 auto;
-  padding: 14px 16px calc(96px + env(safe-area-inset-bottom));
-  min-height: calc(100vh - 60px);
+  flex: 1 1 auto;
+  min-height: 0;                       /* let the flex child shrink so it can scroll */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;        /* no scroll-chaining / pull-to-refresh */
+  width: 100%; max-width: var(--maxw); margin: 0 auto;
+  padding: 14px 16px 24px;
 }
 
-/* ----- Tab bar ----- */
+/* ----- Tab bar (bottom flex child of the shell — never fixed) ----- */
 .tabbar {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+  flex: 0 0 auto; z-index: 30;
+  width: 100%; max-width: var(--maxw); margin: 0 auto;
   display: flex; justify-content: center; gap: 4px;
-  background: color-mix(in srgb, var(--bg-elev) 97%, transparent);
-  backdrop-filter: saturate(160%) blur(14px);
-  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  background: var(--bg-elev);
   border-top: 1px solid var(--border);
   padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
-  /* iOS: own GPU layer to stop the bar ghosting/floating mid-screen while the
-     page is momentum-scrolling (fixed element + backdrop-filter repaint bug). */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  will-change: transform;
 }
 .tab {
   flex: 1; max-width: 120px;
@@ -960,7 +958,7 @@ h1, h2, h3, p { margin: 0; }
 .lock.unlock-anim { transition: opacity 0.28s, transform 0.28s; opacity: 0; transform: scale(1.03); }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-@media (min-width: 680px) { .tabbar { border-radius: 16px 16px 0 0; left: 50%; transform: translateX(-50%); max-width: var(--maxw); } }
+@media (min-width: 680px) { .tabbar { border-radius: 16px 16px 0 0; } }
 @media (max-width: 380px) { .lib-grid { grid-template-columns: 1fr; } }
 
 /* ===== Leaderboard ===== */

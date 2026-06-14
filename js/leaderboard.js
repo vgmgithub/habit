@@ -46,8 +46,10 @@ export function decodePayload(str) {
 export function buildInvite({ challengeId, habitName, inviterName, inviterPhone, startDate }) {
   return { t: 'i', v: PAYLOAD_VERSION, c: challengeId, h: habitName || '', n: inviterName || '', p: digits(inviterPhone), d: startDate };
 }
-export function buildAccept({ challengeId, accepterName, accepterPhone }) {
-  return { t: 'a', v: PAYLOAD_VERSION, c: challengeId, n: accepterName || '', p: digits(accepterPhone) };
+export function buildAccept({ challengeId, accepterName, accepterPhone, habitName, startDate }) {
+  // habitName (h) + startDate (d) are echoed back from the invite so the inviter
+  // can REBUILD the challenge if their local pending copy was lost.
+  return { t: 'a', v: PAYLOAD_VERSION, c: challengeId, n: accepterName || '', p: digits(accepterPhone), h: habitName || '', d: startDate || '' };
 }
 export function buildSync({ challengeId, streak, pct, days, ts }) {
   // NOTE: ts is a ms timestamp (>2^31) — never use `| 0`, which truncates to 32-bit.
@@ -61,7 +63,7 @@ export function parseInvite(p) {
 }
 export function parseAccept(p) {
   if (!p || p.t !== 'a' || !p.c) return null;
-  return { challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p) };
+  return { challengeId: p.c, accepterName: p.n || '', accepterPhone: digits(p.p), habitName: p.h || '', startDate: p.d || '' };
 }
 export function parseSync(p) {
   if (!p || p.t !== 's' || !p.c) return null;

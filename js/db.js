@@ -13,6 +13,7 @@ const DB_NAME = 'habittracker';
 const DB_VERSION = 2;
 
 let _dbPromise = null;
+let _db = null; // resolved IDBDatabase, cached so writes can be issued synchronously
 
 function openDB() {
   if (_dbPromise) return _dbPromise;
@@ -48,11 +49,14 @@ function openDB() {
         s.createIndex('status', 'status', { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => { _db = req.result; resolve(req.result); };
     req.onerror = () => reject(req.error);
   });
   return _dbPromise;
 }
+
+// Best-effort kick so the connection is cached early (idempotent).
+openDB().catch(() => {});
 
 function txStore(store, mode) {
   return openDB().then((db) => db.transaction(store, mode).objectStore(store));
@@ -77,6 +81,24 @@ export const db = {
   async put(store, value) {
     const s = await txStore(store, 'readwrite');
     return reqToPromise(s.put(value));
+  },
+  // SYNCHRONOUS-ISSUE put: when the connection is already open (always true after
+  // boot), create the transaction + issue the put + request commit immediately,
+  // all in the current call frame. Critical before navigator.share() backgrounds
+  // the PWA on Android — the async put() above only starts its transaction in a
+  // later microtask, which may never run if the page is suspended/killed first.
+  // Returns true if issued synchronously; falls back to async put() otherwise.
+  putNow(store, value) {
+    if (_db) {
+      try {
+        const tx = _db.transaction(store, 'readwrite');
+        tx.objectStore(store).put(value);
+        if (tx.commit) tx.commit(); // hint the browser to flush ASAP
+        return true;
+      } catch (_) { /* connection closing/closed — fall through */ }
+    }
+    this.put(store, value).catch(() => {});
+    return false;
   },
   async delete(store, key) {
     const s = await txStore(store, 'readwrite');

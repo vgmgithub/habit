@@ -212,7 +212,9 @@ function saveHabit(habit) {
   const i = state.habits.findIndex((x) => x.id === habit.id);
   if (i >= 0) state.habits[i] = habit; else state.habits.push(habit);
   state.habits.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return db.put('habits', habit);
+  // Synchronous issue+commit (durable before a share suspends the page).
+  db.putNow('habits', habit);
+  return Promise.resolve();
 }
 
 async function deleteHabit(id) {
@@ -2113,7 +2115,9 @@ function registerLeaderboardProtocol() {
 function persistChallenge(ch) {
   const i = state.challenges.findIndex((c) => c.id === ch.id);
   if (i >= 0) state.challenges[i] = ch; else state.challenges.push(ch);
-  return db.put('challenges', ch);
+  // Synchronous issue+commit so the record lands before a share backgrounds us.
+  db.putNow('challenges', ch);
+  return Promise.resolve();
 }
 function findChallenge(id) { return state.challenges.find((c) => c.id === id) || null; }
 
@@ -2271,10 +2275,10 @@ function openInviteModal() {
 
   const body = h('div', { class: 'lb-form' });
 
-  // My name (required for the invite) — only ask if not already set.
+  // Optional display name (only asked once if never set). Not required.
   let nameField = null;
   if (!state.settings.userName) {
-    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name', maxlength: '30' });
+    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name (optional)', maxlength: '30' });
     body.appendChild(formRow('Your name', nameField));
   }
 
@@ -2282,34 +2286,23 @@ function openInviteModal() {
     ...habits.map((hb) => h('option', { value: hb.id }, `${hb.icon || '✅'}  ${hb.name}`)));
   body.appendChild(formRow('Habit to challenge', habitSel));
 
-  const friendName = h('input', { class: 'field', type: 'text', placeholder: "Friend's name", maxlength: '30' });
-  const friendPhone = h('input', { class: 'field', type: 'tel', placeholder: 'WhatsApp number (with country code)', maxlength: '20' });
-  const phoneWrap = h('div', { class: 'lb-phone-wrap' }, friendPhone);
-  if ('contacts' in navigator && navigator.contacts && navigator.contacts.select) {
-    const pick = h('button', { class: 'btn small', type: 'button' }, '📇 Pick');
-    pick.addEventListener('click', () => pickContact(friendName, friendPhone));
-    phoneWrap.appendChild(pick);
-  }
-  body.appendChild(formRow("Friend's name", friendName));
-  body.appendChild(formRow('WhatsApp number', phoneWrap, 'Optional — leave blank to choose the chat in WhatsApp.'));
+  // Optional label only — you choose the actual recipient inside WhatsApp, so no
+  // phone number is needed here.
+  const friendName = h('input', { class: 'field', type: 'text', placeholder: "Friend's name (optional)", maxlength: '30' });
+  body.appendChild(formRow("Friend's name", friendName, 'Just a label to tell challenges apart — you pick who to send to in WhatsApp.'));
 
-  const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & open WhatsApp');
+  const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & share');
   create.addEventListener('click', async () => {
-    // --- all validation is SYNC (no await) so the gesture survives to window.open ---
-    const fname = friendName.value.trim();
-    if (!fname) { toast("Enter your friend's name"); friendName.focus(); return; }
     const hb = state.habits.find((x) => x.id === habitSel.value);
     if (!hb) { toast('Pick a habit'); return; }
+    const fname = friendName.value.trim() || 'Friend';
     let myName = state.settings.userName;
-    if (nameField) {
-      myName = nameField.value.trim();
-      if (!myName) { toast('Enter your name'); nameField.focus(); return; }
-    }
+    if (nameField) myName = nameField.value.trim();
 
     const ch = {
       id: uid(), status: 'pending', role: 'inviter',
       habitId: hb.id, habitName: hb.name,
-      friendName: fname, friendPhone: friendPhone.value.trim(),
+      friendName: fname, friendPhone: '',
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
@@ -2368,7 +2361,7 @@ function openAcceptModal(invite) {
 
   let nameField = null;
   if (!state.settings.userName) {
-    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name', maxlength: '30' });
+    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name (optional)', maxlength: '30' });
     body.appendChild(formRow('Your name', nameField));
   }
 
@@ -2384,10 +2377,7 @@ function openAcceptModal(invite) {
   const accept = h('button', { class: 'btn btn-primary wide' }, '✅ Accept challenge');
   accept.addEventListener('click', async () => {
     let myName = state.settings.userName;
-    if (nameField) {
-      myName = nameField.value.trim();
-      if (!myName) { toast('Enter your name'); nameField.focus(); return; }
-    }
+    if (nameField) myName = nameField.value.trim();
     // Resolve the habit synchronously (blankHabit() generates an id without I/O)
     // so we can open WhatsApp in-gesture before any await; saving happens after.
     let newHabit = null, habitId;
@@ -2408,7 +2398,7 @@ function openAcceptModal(invite) {
     };
     // Send acceptance back FIRST (synchronously, in-gesture) so the inviter's
     // challenge goes active — mobile blocks window.open after an await.
-    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone });
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone, habitName: ch.habitName, startDate: ch.startDate });
     const link = deepLink('accept', payload);
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
     // Create habit + challenge and render FIRST (sync state, background writes),
@@ -2429,16 +2419,29 @@ function openAcceptModal(invite) {
 }
 
 // Inviter receives the acceptance → mark their pending challenge active.
+// If the local pending copy is missing (e.g. it never committed before a share
+// backgrounded the app), REBUILD it from the details echoed in the accept link
+// so the challenge is never lost.
 function handleAccept(accept) {
-  const ch = findChallenge(accept.challengeId);
-  if (!ch) { toast('Challenge not found on this device'); return; }
-  ch.status = 'active';
-  if (accept.accepterName) ch.friendName = accept.accepterName;
-  if (accept.accepterPhone) ch.friendPhone = accept.accepterPhone;
-  persistChallenge(ch).then(() => {
-    setView('leaderboard');
-    toast(`${ch.friendName} accepted your challenge!`, { celebrate: true });
-  });
+  let ch = findChallenge(accept.challengeId);
+  if (!ch) {
+    const habit = state.habits.find((x) => x.name.toLowerCase() === (accept.habitName || '').toLowerCase());
+    ch = {
+      id: accept.challengeId, status: 'active', role: 'inviter',
+      habitId: habit ? habit.id : '',
+      habitName: accept.habitName || 'Habit',
+      friendName: accept.accepterName || 'Friend', friendPhone: accept.accepterPhone || '',
+      startDate: accept.startDate || M.todayStr(), createdAt: Date.now(),
+      theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
+    };
+  } else {
+    ch.status = 'active';
+    if (accept.accepterName) ch.friendName = accept.accepterName;
+    if (accept.accepterPhone) ch.friendPhone = accept.accepterPhone;
+  }
+  persistChallenge(ch);
+  setView('leaderboard');
+  toast(`${ch.friendName} accepted your challenge!`, { celebrate: true });
 }
 
 // ----- Sync flow -------------------------------------------------------------
@@ -3197,14 +3200,10 @@ async function boot() {
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => setView(t.dataset.view)));
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (state.settings.theme === 'auto') applyTheme(); });
 
-  // Disable pull-to-refresh by preventing touchmove at the top of the page
-  let touchStartY = 0;
-  document.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; }, false);
-  document.addEventListener('touchmove', (e) => {
-    if (document.documentElement.scrollTop === 0 && e.touches[0].clientY > touchStartY) {
-      e.preventDefault();
-    }
-  }, { passive: false });
+  // Pull-to-refresh is now prevented structurally: the body doesn't scroll
+  // (overflow:hidden app-shell) and the content pane uses overscroll-behavior:
+  // contain. No touchmove hijacking needed — that would block legitimate
+  // scrolling inside the content pane.
 
   // Lock only on cold app start (first load), not on pull-refresh or warm return from background.
   // Once the app has booted once this session, appWasRunning stays true for the lifetime.

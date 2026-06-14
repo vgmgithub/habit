@@ -2076,18 +2076,18 @@ async function shareLink(text) {
   // 1. Native share sheet
   if (navigator.share) {
     try {
-      await navigator.share({ title: ‘Habit Challenge’, text });
+      await navigator.share({ title: 'Habit Challenge', text });
       return;
     } catch (e) {
       // AbortError = user cancelled — silent.
       // NotAllowedError / anything else = fall through to wa.me.
-      if (e && e.name === ‘AbortError’) return;
+      if (e && e.name === 'AbortError') return;
     }
   }
 
   // 2. WhatsApp direct link via window.open (Android / desktop)
   try {
-    const win = window.open(waUrl, ‘_blank’);
+    const win = window.open(waUrl, '_blank');
     if (win) return;
   } catch (_) {}
 
@@ -2101,9 +2101,9 @@ async function shareLink(text) {
   // 4. Clipboard fallback
   try {
     await navigator.clipboard.writeText(text);
-    toast(‘Copied — paste into WhatsApp to send.’, { duration: 4500 });
+    toast('Copied — paste into WhatsApp to send.', { duration: 4500 });
   } catch (_) {
-    toast(‘Could not open WhatsApp. Copy the message manually.’, { duration: 5000 });
+    toast('Could not open WhatsApp. Copy the message manually.', { duration: 5000 });
   }
 }
 

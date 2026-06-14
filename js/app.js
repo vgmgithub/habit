@@ -2047,11 +2047,26 @@ function dirUrl() {
 function deepLink(type, payloadObj) {
   return `${dirUrl()}index.html?${type}=${LB.encodePayload(payloadObj)}`;
 }
-// Opens WhatsApp with prefilled text. With a number → direct chat; without → picker.
-function openWhatsApp(phone, text) {
+// Emoji built from code points so the byte sequence can NEVER be mangled by a
+// file-encoding / deployment mishap (pure-ASCII source → always correct).
+const EMOJI_FIRE = String.fromCodePoint(0x1F525); // 🔥
+
+// Builds the wa.me URL. With a number → direct chat; without → contact picker.
+function waUrl(phone, text) {
   const digits = (phone || '').replace(/[^0-9]/g, '');
   const base = digits ? `https://wa.me/${digits}` : 'https://wa.me/';
-  window.open(`${base}?text=${encodeURIComponent(text)}`, '_blank');
+  return `${base}?text=${encodeURIComponent(text)}`;
+}
+// IMPORTANT: must be called SYNCHRONOUSLY inside the click handler (before any
+// await) — mobile browsers block window.open once the user-gesture context is
+// lost across an await. Falls back to same-tab navigation if the popup is
+// blocked anyway (common on mobile).
+function openWhatsApp(phone, text) {
+  const url = waUrl(phone, text);
+  let win = null;
+  try { win = window.open(url, '_blank', 'noopener'); } catch (_) {}
+  if (!win) location.href = url;
+  return url;
 }
 
 async function persistChallenge(ch) {
@@ -2173,7 +2188,7 @@ function challengeCard(ch) {
 function scoreCol(label, streak, pct, done, known, leading) {
   return h('div', { class: 'lb-col' + (leading ? ' leading' : '') },
     h('div', { class: 'lb-col-name' }, label),
-    h('div', { class: 'lb-streak' }, known ? `${streak}` : '—', h('span', { class: 'lb-fire' }, known ? ' 🔥' : '')),
+    h('div', { class: 'lb-streak' }, known ? `${streak}` : '—', h('span', { class: 'lb-fire' }, known ? ' ' + EMOJI_FIRE : '')),
     h('div', { class: 'lb-col-sub' }, known ? `${pct}% · ${done} day${done === 1 ? '' : 's'}` : 'no data yet'));
 }
 
@@ -2235,15 +2250,16 @@ function openInviteModal() {
 
   const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & open WhatsApp');
   create.addEventListener('click', async () => {
-    if (nameField) {
-      const n = nameField.value.trim();
-      if (!n) { toast('Enter your name'); nameField.focus(); return; }
-      state.settings.userName = n; await setSetting('userName', n);
-    }
+    // --- all validation is SYNC (no await) so the gesture survives to window.open ---
     const fname = friendName.value.trim();
     if (!fname) { toast("Enter your friend's name"); friendName.focus(); return; }
     const hb = state.habits.find((x) => x.id === habitSel.value);
     if (!hb) { toast('Pick a habit'); return; }
+    let myName = state.settings.userName;
+    if (nameField) {
+      myName = nameField.value.trim();
+      if (!myName) { toast('Enter your name'); nameField.focus(); return; }
+    }
 
     const ch = {
       id: uid(), status: 'pending', role: 'inviter',
@@ -2252,23 +2268,27 @@ function openInviteModal() {
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
+    // Open WhatsApp FIRST, synchronously, while still in the click gesture.
+    shareInvite(ch, myName);
+    // Persist + UI updates afterwards (these awaits don't affect the open tab).
+    if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
     await persistChallenge(ch);
     closeModal();
-    shareInvite(ch);
     setView('leaderboard');
   });
 
   openModal('Invite a friend', body, [create]);
 }
 
-function shareInvite(ch) {
+function shareInvite(ch, myName) {
+  const name = (myName != null ? myName : state.settings.userName) || '';
   const payload = LB.buildInvite({
     challengeId: ch.id, habitName: ch.habitName,
-    inviterName: state.settings.userName, inviterPhone: state.settings.userPhone,
+    inviterName: name, inviterPhone: state.settings.userPhone,
     startDate: ch.startDate,
   });
   const link = deepLink('invite', payload);
-  const text = `${state.settings.userName || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! 🌱\n\nTap to accept:\n${link}`;
+  const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept:\n${link}`;
   openWhatsApp(ch.friendPhone, text);
 }
 
@@ -2319,10 +2339,10 @@ function openAcceptModal(invite) {
   const accept = h('button', { class: 'btn btn-primary wide' }, '✅ Accept challenge');
   accept.disabled = !habits.length;
   accept.addEventListener('click', async () => {
+    let myName = state.settings.userName;
     if (nameField) {
-      const n = nameField.value.trim();
-      if (!n) { toast('Enter your name'); nameField.focus(); return; }
-      state.settings.userName = n; await setSetting('userName', n);
+      myName = nameField.value.trim();
+      if (!myName) { toast('Enter your name'); nameField.focus(); return; }
     }
     const ch = {
       id: invite.challengeId, status: 'active', role: 'invitee',
@@ -2331,13 +2351,16 @@ function openAcceptModal(invite) {
       startDate: invite.startDate, createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
+    // Send acceptance back FIRST (synchronously, in-gesture) so the inviter's
+    // challenge goes active — mobile blocks window.open after an await.
+    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone });
+    const link = deepLink('accept', payload);
+    const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me to your leaderboard:\n${link}`;
+    openWhatsApp(ch.friendPhone, text);
+    // Persist + UI afterwards.
+    if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
     await persistChallenge(ch);
     closeModal();
-    // Send acceptance back so the inviter's challenge goes active.
-    const payload = LB.buildAccept({ challengeId: ch.id, accepterName: state.settings.userName, accepterPhone: state.settings.userPhone });
-    const link = deepLink('accept', payload);
-    const text = `I accepted your "${ch.habitName}" challenge — game on! 🔥\n\nTap to add me to your leaderboard:\n${link}`;
-    openWhatsApp(ch.friendPhone, text);
     setView('leaderboard');
     toast('Challenge accepted!', { celebrate: true });
   });
@@ -2368,7 +2391,7 @@ function openSyncShareModal(ch) {
   body.appendChild(h('div', { class: 'lb-sync-preview' },
     h('div', { class: 'lb-habit' }, `${ch.habitName} · with ${ch.friendName}`),
     h('div', { class: 'lb-sync-stats' },
-      statPill('Streak', `${mine.streak} 🔥`),
+      statPill('Streak', `${mine.streak} ${EMOJI_FIRE}`),
       statPill('Completion', `${mine.pct}%`),
       statPill('Days', `${mine.done}`))));
   body.appendChild(h('p', { class: 'muted small' }, 'Sends your current numbers as a WhatsApp link. Your friend taps it to update their leaderboard.'));
@@ -2377,11 +2400,12 @@ function openSyncShareModal(ch) {
   send.addEventListener('click', async () => {
     const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
     const link = deepLink('sync', payload);
-    const text = `My "${ch.habitName}" challenge update: ${mine.streak}🔥 streak, ${mine.pct}% done.\n\nTap to update your leaderboard:\n${link}`;
+    const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\nTap to update your leaderboard:\n${link}`;
+    // Open WhatsApp FIRST (in-gesture), then persist.
+    openWhatsApp(ch.friendPhone, text);
     ch.lastSentAt = Date.now();
     await persistChallenge(ch);
     closeModal();
-    openWhatsApp(ch.friendPhone, text);
   });
   openModal('Sync progress', body, [send]);
 }
@@ -2404,7 +2428,7 @@ function handleSyncReceive(sync) {
     setView('leaderboard');
     // Success + offer to reply with my own progress.
     const body = h('div', null,
-      h('p', null, `Updated ${ch.friendName}'s progress: ${sync.streak}🔥 streak, ${sync.pct}% done.`),
+      h('p', null, `Updated ${ch.friendName}'s progress: ${sync.streak}${EMOJI_FIRE} streak, ${sync.pct}% done.`),
       h('p', { class: 'muted small', style: { marginTop: '8px' } }, 'Send your latest progress back so they stay up to date too?'));
     const sendBack = h('button', { class: 'btn btn-primary wide' }, '📲 Send my update');
     sendBack.addEventListener('click', () => { closeModal(); openSyncShareModal(ch); });

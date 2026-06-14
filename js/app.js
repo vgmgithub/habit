@@ -2057,16 +2057,31 @@ function waUrl(phone, text) {
   const base = digits ? `https://wa.me/${digits}` : 'https://wa.me/';
   return `${base}?text=${encodeURIComponent(text)}`;
 }
-// IMPORTANT: must be called SYNCHRONOUSLY inside the click handler (before any
-// await) — mobile browsers block window.open once the user-gesture context is
-// lost across an await. Falls back to same-tab navigation if the popup is
-// blocked anyway (common on mobile).
-function openWhatsApp(phone, text) {
+// Share a prefilled message. MUST be invoked from a click handler as the FIRST
+// await (its native-share / window.open call has to run inside the user gesture).
+//
+// Order of preference:
+//  1) navigator.share — the native share sheet. Critical on iOS: it's the ONLY
+//     thing that works when the page is running inside WhatsApp's in-app browser
+//     (a wa.me link there does nothing — you can't relaunch WhatsApp from its
+//     own webview). Lets the user pick WhatsApp + the contact.
+//  2) wa.me via window.open — desktop / Android browsers.
+//  3) clipboard copy + toast — last-resort manual paste.
+async function shareLink(text, phone) {
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; /* cancelled — don't fall through */ }
+  }
   const url = waUrl(phone, text);
   let win = null;
   try { win = window.open(url, '_blank', 'noopener'); } catch (_) {}
-  if (!win) location.href = url;
-  return url;
+  if (win) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Couldn’t open WhatsApp — message copied. Paste it into your chat.', { duration: 4500 });
+    return;
+  } catch (_) {}
+  location.href = url; // absolute last resort
 }
 
 // True when running as an installed PWA (own window) rather than a browser tab.
@@ -2292,9 +2307,9 @@ function openInviteModal() {
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
-    // Open WhatsApp FIRST, synchronously, while still in the click gesture.
-    shareInvite(ch, myName);
-    // Persist + UI updates afterwards (these awaits don't affect the open tab).
+    // Share FIRST (native sheet/WhatsApp) while still in the click gesture.
+    await shareInvite(ch, myName);
+    // Persist + UI updates afterwards.
     if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
     await persistChallenge(ch);
     closeModal();
@@ -2304,7 +2319,7 @@ function openInviteModal() {
   openModal('Invite a friend', body, [create]);
 }
 
-function shareInvite(ch, myName) {
+async function shareInvite(ch, myName) {
   const name = (myName != null ? myName : state.settings.userName) || '';
   const payload = LB.buildInvite({
     challengeId: ch.id, habitName: ch.habitName,
@@ -2312,8 +2327,8 @@ function shareInvite(ch, myName) {
     startDate: ch.startDate,
   });
   const link = deepLink('invite', payload);
-  const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept:\n${link}`;
-  openWhatsApp(ch.friendPhone, text);
+  const text = `${name || 'A friend'} challenged you to a "${ch.habitName}" habit streak on Habits! ${EMOJI_FIRE}\n\nTap to accept (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+  await shareLink(text, ch.friendPhone);
 }
 
 async function pickContact(nameInput, phoneInput) {
@@ -2387,8 +2402,9 @@ function openAcceptModal(invite) {
     // challenge goes active — mobile blocks window.open after an await.
     const payload = LB.buildAccept({ challengeId: ch.id, accepterName: myName, accepterPhone: state.settings.userPhone });
     const link = deepLink('accept', payload);
-    const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me to your leaderboard:\n${link}`;
-    openWhatsApp(ch.friendPhone, text);
+    const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+    // Share FIRST (native sheet works inside WhatsApp's in-app browser on iOS).
+    await shareLink(text, ch.friendPhone);
     // Persist + UI afterwards.
     if (nameField) { state.settings.userName = myName; await setSetting('userName', myName); }
     if (newHabit) await saveHabit(newHabit);
@@ -2433,9 +2449,9 @@ function openSyncShareModal(ch) {
   send.addEventListener('click', async () => {
     const payload = LB.buildSync({ challengeId: ch.id, streak: mine.streak, pct: mine.pct, days: mine.done, ts: Date.now() });
     const link = deepLink('sync', payload);
-    const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\nTap to update your leaderboard:\n${link}`;
-    // Open WhatsApp FIRST (in-gesture), then persist.
-    openWhatsApp(ch.friendPhone, text);
+    const text = `My "${ch.habitName}" challenge update: ${mine.streak}${EMOJI_FIRE} streak, ${mine.pct}% done.\n\nTap to update (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
+    // Share FIRST (in-gesture), then persist.
+    await shareLink(text, ch.friendPhone);
     ch.lastSentAt = Date.now();
     await persistChallenge(ch);
     closeModal();

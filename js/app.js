@@ -2281,29 +2281,19 @@ function openInviteModal() {
 
   const body = h('div', { class: 'lb-form' });
 
-  // Optional display name (only asked once if never set). Not required.
-  let nameField = null;
-  if (!state.settings.userName) {
-    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name (optional)', maxlength: '30' });
-    body.appendChild(formRow('Your name', nameField));
-  }
-
   const habitSel = h('select', { class: 'field' },
     ...habits.map((hb) => h('option', { value: hb.id }, `${hb.icon || '✅'}  ${hb.name}`)));
   body.appendChild(formRow('Habit to challenge', habitSel));
 
-  // Optional label only — you choose the actual recipient inside WhatsApp, so no
-  // phone number is needed here.
   const friendName = h('input', { class: 'field', type: 'text', placeholder: "Friend's name (optional)", maxlength: '30' });
-  body.appendChild(formRow("Friend's name", friendName, 'Just a label to tell challenges apart — you pick who to send to in WhatsApp.'));
+  body.appendChild(formRow("Friend's name", friendName, 'Just a label for the card — pick the contact inside WhatsApp.'));
 
   const create = h('button', { class: 'btn btn-primary wide' }, '📲 Create & share');
   create.addEventListener('click', async () => {
     const hb = state.habits.find((x) => x.id === habitSel.value);
     if (!hb) { toast('Pick a habit'); return; }
     const fname = friendName.value.trim() || 'Friend';
-    let myName = state.settings.userName;
-    if (nameField) myName = nameField.value.trim();
+    const myName = state.settings.userName || '';
 
     const ch = {
       id: uid(), status: 'pending', role: 'inviter',
@@ -2312,14 +2302,9 @@ function openInviteModal() {
       startDate: M.todayStr(), createdAt: Date.now(),
       theirStreak: 0, theirPct: 0, theirDays: 0, lastSyncedAt: 0, lastSentAt: 0,
     };
-    // Create + render the box FIRST (state is synchronous; DB write runs in the
-    // background). On Android the share sheet can suspend this handler, so the
-    // challenge must already exist before we share — never rely on post-share code.
-    if (nameField) { state.settings.userName = myName; setSetting('userName', myName); }
-    persistChallenge(ch).catch(() => {});
+    persistChallenge(ch);
     closeModal();
     setView('leaderboard');
-    // Share LAST, still inside the click gesture (nothing above awaited).
     await shareInvite(ch, myName);
   });
 
@@ -2365,12 +2350,6 @@ function openAcceptModal(invite) {
       h('div', { class: 'lb-friend-name' }, `${invite.inviterName || 'A friend'} invited you`),
       h('div', { class: 'lb-habit' }, `“${invite.habitName}” challenge · starts ${invite.startDate}`))));
 
-  let nameField = null;
-  if (!state.settings.userName) {
-    nameField = h('input', { class: 'field', type: 'text', placeholder: 'Your name (optional)', maxlength: '30' });
-    body.appendChild(formRow('Your name', nameField));
-  }
-
   // First option creates a brand-new habit; the rest link an existing one. This
   // means accepting is NEVER a dead-end, even if you don't track this habit yet.
   const CREATE = '__create__';
@@ -2382,8 +2361,7 @@ function openAcceptModal(invite) {
 
   const accept = h('button', { class: 'btn btn-primary wide' }, '✅ Accept challenge');
   accept.addEventListener('click', async () => {
-    let myName = state.settings.userName;
-    if (nameField) myName = nameField.value.trim();
+    const myName = state.settings.userName || '';
     // Resolve the habit synchronously (blankHabit() generates an id without I/O)
     // so we can open WhatsApp in-gesture before any await; saving happens after.
     let newHabit = null, habitId;
@@ -2409,7 +2387,6 @@ function openAcceptModal(invite) {
     const text = `I accepted your "${ch.habitName}" challenge — game on! ${EMOJI_FIRE}\n\nTap to add me (on iPhone: open Habits → "I have a code" → paste):\n${link}`;
     // Create habit + challenge and render FIRST (sync state, background writes),
     // so the box exists before the share sheet can suspend this handler.
-    if (nameField) { state.settings.userName = myName; setSetting('userName', myName); }
     if (newHabit) saveHabit(newHabit).catch(() => {});
     persistChallenge(ch).catch(() => {});
     closeModal();

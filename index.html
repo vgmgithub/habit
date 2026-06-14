@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#10b981" id="theme-color-meta" />
+  <meta name="description" content="A fast, private, offline-first habit tracker." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Habits" />
+  <title>Habits</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/favicon.png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="./css/styles.css" />
+  <!-- Block paint until the saved theme is applied (no flash of wrong theme). -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('ht_theme') || 'auto';
+        var dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        var accent = localStorage.getItem('ht_accent');
+        if (accent) document.documentElement.style.setProperty('--accent', accent);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <!-- Lock screen (shown only when a PIN/biometric is set) -->
+  <div id="lock" class="lock hidden" aria-hidden="true">
+    <div class="lock-bg"></div>
+    <div class="lock-inner">
+      <div class="lock-brand">
+        <img src="./icons/icon-192.png" alt="" class="lock-logo" />
+        <div class="lock-app-name">Habits</div>
+      </div>
+      <h2 id="lock-greeting">Welcome back</h2>
+      <p class="lock-sub" id="lock-sub">Enter your PIN to continue</p>
+      <div class="pin-dots" id="pin-dots"></div>
+      <div class="pin-pad" id="pin-pad"></div>
+      <p class="lock-error" id="lock-error"></p>
+      <button id="lock-biometric" class="lock-biometric hidden" type="button" aria-label="Unlock with fingerprint">
+        <span class="bio-ico">👆</span> <span>Use fingerprint</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <header class="appbar" id="appbar">
+    <div class="appbar-inner">
+      <h1 id="view-title">Today</h1>
+      <div class="appbar-actions" id="appbar-actions"></div>
+    </div>
+  </header>
+
+  <main id="app" class="app"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab" data-view="today" aria-label="Today">
+      <span class="tab-ico">✓</span><span class="tab-label">Today</span>
+    </button>
+    <button class="tab" data-view="tracker" aria-label="Tracker">
+      <span class="tab-ico">📔</span><span class="tab-label">Tracker</span>
+    </button>
+    <button class="tab" data-view="stats" aria-label="Stats">
+      <span class="tab-ico">📊</span><span class="tab-label">Stats</span>
+    </button>
+    <button class="tab" data-view="insights" aria-label="Insights">
+      <span class="tab-ico">💡</span><span class="tab-label">Insights</span>
+    </button>
+  </nav>
+
+  <!-- Modal host (edit habit, detail, dialogs) -->
+  <div id="modal-root"></div>
+
+  <!-- Toast host -->
+  <div id="toast-root" class="toast-root"></div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

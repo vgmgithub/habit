@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Demo · Consistency growth (4 levels)</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+  <style>
+    :root { --bg: #f4f6f8; --card: #ffffff; --text: #1c2433; --text-dim: #6b7689; --text-faint: #98a2b3; --border: #e7ebf0; --accent: #10b981; }
+    body { padding: 28px 18px 60px; max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; font-weight: 800; margin-bottom: 6px; }
+    .intro { color: var(--text-dim); margin-bottom: 24px; font-size: 0.95rem; line-height: 1.5; }
+    .tier-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 540px) { .tier-grid { grid-template-columns: 1fr; } }
+    .tier {
+      background: linear-gradient(160deg,
+        color-mix(in srgb, #bae6fd 32%, var(--card)) 0%,
+        color-mix(in srgb, var(--accent) 4%, var(--card)) 75%,
+        var(--card) 100%);
+      border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+      border-radius: 22px;
+      padding: 14px 16px 18px;
+      box-shadow: 0 1px 3px rgba(20, 30, 50, 0.06), 0 8px 22px rgba(20, 30, 50, 0.06);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      overflow: hidden;
+    }
+    /* Each level is a standalone image, bottom-center aligned in the card */
+    .tier-art {
+      width: 164px; height: 164px;
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    .tier-art img {
+      max-width: 100%; max-height: 100%;
+      user-select: none; pointer-events: none;
+    }
+    .tier-range {
+      font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--accent); margin-top: 4px;
+    }
+    .tier-num { font-size: 2.4rem; font-weight: 800; color: var(--accent); line-height: 1; }
+    .tier-label { font-size: 0.82rem; color: var(--text-dim); font-weight: 600; text-align: center; }
+    .tier-name { font-size: 1rem; font-weight: 800; color: var(--text); }
+  </style>
+</head>
+<body>
+  <h1>🌱 Consistency Growth · 6 Levels</h1>
+  <p class="intro">The reference illustration split into six growth stages: planting → sprouting → young sapling → growing tree → mature tree → grand tree.</p>
+  <div class="tier-grid" id="grid"></div>
+
+  <script>
+    // Each level has its own standalone image (icons/growth-1..5.png),
+    // pre-split from the reference illustration — no cross-stage bleed.
+    // `scale` is relative height within the card so smaller stages stay smaller.
+    const tiers = [
+      { range: '1 – 50',    num: 25,  name: 'Planting',      img: './icons/growth-1.png', scale: 0.42 },
+      { range: '51 – 100',  num: 75,  name: 'Sprouting',     img: './icons/growth-2.png', scale: 0.34 },
+      { range: '101 – 150', num: 125, name: 'Young sapling', img: './icons/growth-3.png', scale: 0.55 },
+      { range: '151 – 200', num: 175, name: 'Growing tree',  img: './icons/growth-4.png', scale: 0.78 },
+      { range: '201 – 250', num: 225, name: 'Mature tree',   img: './icons/growth-5.png', scale: 0.88 },
+      { range: '251 – 300', num: 275, name: 'Grand tree',    img: './icons/growth-6.png', scale: 1.00 },
+    ];
+
+    const grid = document.getElementById('grid');
+    for (const t of tiers) {
+      const card = document.createElement('div');
+      card.className = 'tier';
+      card.innerHTML = `
+        <div class="tier-art">
+          <img src="${t.img}" alt="${t.name}" style="max-height:${Math.round(t.scale * 100)}%;" />
+        </div>
+        <div class="tier-range">Day ${t.range}</div>
+        <div class="tier-num">${t.num}</div>
+        <div class="tier-label">days of showing up</div>
+        <div class="tier-name">${t.name}</div>
+      `;
+      grid.appendChild(card);
+    }
+  </script>
+</body>
+</html>

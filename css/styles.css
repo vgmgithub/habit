@@ -265,7 +265,7 @@ h1, h2, h3, p { margin: 0; }
 
 /* Compact stats sitting inline on the per-habit card's first row. */
 .stat-inline { display: flex; gap: 8px; flex: none; }
-.stat-inline .stat { flex: none; min-width: 140px; padding: 6px 18px; }
+.stat-inline .stat { flex: none; min-width: 80px; padding: 6px 18px; }
 .stat-inline .stat-val { font-size: 0.98rem; line-height: 1.15; white-space: nowrap; }
 .stat-inline .stat-lbl { font-size: 0.62rem; }
 /* Divider between the first row and the heatmap. */

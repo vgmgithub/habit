@@ -263,6 +263,12 @@ h1, h2, h3, p { margin: 0; }
 .stat-val { font-weight: 800; font-size: 1.05rem; }
 .stat-lbl { font-size: 0.7rem; color: var(--text-dim); }
 
+/* Compact stats sitting inline on the per-habit card's first row. */
+.stat-inline { display: flex; gap: 8px; flex: none; }
+.stat-inline .stat { flex: none; min-width: 52px; padding: 6px 10px; }
+.stat-inline .stat-val { font-size: 0.98rem; line-height: 1.15; white-space: nowrap; }
+.stat-inline .stat-lbl { font-size: 0.62rem; }
+
 /* heatmap — 30-day single-line scrollable strip */
 .heat-block { margin-top: 14px; }
 .heat-caption {

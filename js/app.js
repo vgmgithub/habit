@@ -1013,13 +1013,13 @@ function renderStats() {
       nameLine,
       h('span', null, freqLabel(habit)));
 
+    // Compact: name + the Current/Total stats share the first row.
     card.appendChild(h('div', { class: 'stat-head' },
       h('div', { class: 'hicon sm', style: { background: tint(habit.color), color: habit.color } }, habit.icon || '✅'),
-      nameRow));
-
-    card.appendChild(h('div', { class: 'stat-row' },
-      stat(`🔥 ${s.cur}`, 'Current'),
-      stat(`${s.totalDone}`, 'Total')));
+      nameRow,
+      h('div', { class: 'stat-inline' },
+        stat(`🔥 ${s.cur}`, 'Current'),
+        stat(`${s.totalDone}`, 'Total'))));
 
     card.appendChild(heatmap(habit, today));
     // Stats is read-only: tapping anywhere on the card opens the notes-only

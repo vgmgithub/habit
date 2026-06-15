@@ -1021,6 +1021,7 @@ function renderStats() {
         stat(`🔥 ${s.cur}`, 'Current'),
         stat(`${s.totalDone}`, 'Total'))));
 
+    card.appendChild(h('hr', { class: 'stat-divider' }));
     card.appendChild(heatmap(habit, today));
     // Stats is read-only: tapping anywhere on the card opens the notes-only
     // history view. Editing lives in Habits; Done/Skip live in Today.

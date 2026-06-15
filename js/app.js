@@ -1117,6 +1117,21 @@ function growthIcon(streak) {
 function growthImg(streak, cls) {
   return h('img', { class: cls, src: growthIcon(streak), alt: '' });
 }
+// Last user-perceived character of a string. Uses Intl.Segmenter so compound
+// emoji (ZWJ sequences like 🧑‍🚀, flags, skin-tone modifiers) stay intact;
+// falls back to code-point split where Segmenter is unavailable.
+function lastGrapheme(str) {
+  const s = (str || '').trim();
+  if (!s) return '';
+  try {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      const parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), (x) => x.segment);
+      return parts[parts.length - 1] || '';
+    }
+  } catch (_) { /* fall through */ }
+  const g = Array.from(s);
+  return g[g.length - 1] || '';
+}
 // Small deterministic string hash → stable per-day quote seed (no flicker on re-render).
 function hashStr(s) {
   let h = 0;
@@ -1529,13 +1544,42 @@ function openEditor(existing) {
   // selectable but visually deprioritised so new habits stay distinct.
   const usedIcons = new Set(state.habits.filter((x) => x.id !== habit.id && !x.paused && !x.archived).map((x) => x.icon));
   const iconRow = h('div', { class: 'picker-row' });
+
+  // Custom emoji: type/paste any emoji from the device keyboard (mobile) or OS
+  // picker (desktop). Pre-filled when editing a habit whose icon isn't a preset.
+  const isPresetIcon = HABIT_ICONS.includes(habit.icon);
+  const customIcon = h('input', {
+    class: 'field emoji-input',
+    type: 'text',
+    inputmode: 'text',
+    enterkeyhint: 'done',
+    'aria-label': 'Use any emoji',
+    placeholder: '😀 Any emoji',
+    value: isPresetIcon ? '' : (habit.icon || ''),
+    maxlength: '12',
+  });
+
   HABIT_ICONS.forEach((ic) => {
     const b = h('button', {
       class: 'pick' + (ic === habit.icon ? ' on' : '') + (usedIcons.has(ic) ? ' used' : ''),
       title: usedIcons.has(ic) ? 'Already used by another habit' : null,
     }, ic);
-    b.addEventListener('click', () => { habit.icon = ic; iconRow.querySelectorAll('.pick').forEach((x) => x.classList.remove('on')); b.classList.add('on'); });
+    b.addEventListener('click', () => {
+      habit.icon = ic;
+      customIcon.value = '';
+      iconRow.querySelectorAll('.pick').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+    });
     iconRow.appendChild(b);
+  });
+
+  // Keep only the most-recent emoji glyph; sync selection state with the grid.
+  customIcon.addEventListener('input', () => {
+    const emoji = lastGrapheme(customIcon.value);
+    if (!emoji) return;
+    customIcon.value = emoji;
+    habit.icon = emoji;
+    iconRow.querySelectorAll('.pick').forEach((x) => x.classList.toggle('on', x.textContent === emoji));
   });
   const usedColors = new Set(state.habits.filter((x) => x.id !== habit.id && !x.paused && !x.archived).map((x) => x.color));
   const colorRow = h('div', { class: 'picker-row' });
@@ -1634,7 +1678,7 @@ function openEditor(existing) {
 
   const body = h('div', { class: 'editor' },
     field('Name', nameInput),
-    field('Icon', iconRow),
+    field('Icon', h('div', null, iconRow, customIcon)),
     field('Color', colorRow),
     field('Frequency', h('div', null, freqSeg, freqExtra)),
     field('Time of day', routineSeg),

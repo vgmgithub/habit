@@ -680,6 +680,7 @@ h1, h2, h3, p { margin: 0; }
 .picker-row { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px; }
 .pick { width: 44px; height: 44px; flex: none; border-radius: 11px; background: var(--card); border: 1px solid var(--border); font-size: 1.4rem; display: flex; align-items: center; justify-content: center; }
 .pick.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
+.emoji-input { margin-top: 8px; width: 100%; font-size: 1.05rem; }
 .pick-color { width: 36px; height: 36px; flex: none; border-radius: 50%; border: 3px solid transparent; }
 .pick-color.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg-elev); }
 

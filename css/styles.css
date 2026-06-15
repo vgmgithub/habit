@@ -916,6 +916,7 @@ h1, h2, h3, p { margin: 0; }
 }
 .cs-hero-art { height: 120px; width: auto; display: block; margin: 0 auto 10px; }
 .cs-hero-num { font-size: 3.2rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: var(--accent); }
+.cs-hero-level { font-size: 0.78rem; font-weight: 800; color: #059669; margin-top: 5px; letter-spacing: 0.01em; }
 .cs-hero-label { font-size: 1rem; color: var(--text-dim); margin-top: 6px; }
 .cs-hero-sub { margin-top: 10px; font-size: 0.82rem; max-width: 320px; margin-left: auto; margin-right: auto; }
 

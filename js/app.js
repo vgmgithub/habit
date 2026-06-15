@@ -548,9 +548,11 @@ function renderInsights() {
   // Consistency streak hero
   const cStreak = M.consistencyStreak(habits, state.logsByHabit, today);
   const bStreak = M.bestConsistencyStreak(habits, state.logsByHabit, today);
+  const lvl = growthTier(cStreak);
   const hero = h('div', { class: 'consistency-hero' },
     growthImg(cStreak, 'cs-hero-art'),
     h('div', { class: 'cs-hero-num' }, String(cStreak)),
+    h('div', { class: 'cs-hero-level' }, `Level ${lvl} · ${GROWTH_LEVEL_NAMES[lvl]}`),
     h('div', { class: 'cs-hero-label' }, `day${cStreak === 1 ? '' : 's'} of showing up`),
     h('div', { class: 'cs-hero-sub muted small' },
       bStreak > cStreak ? `Personal best: ${bStreak} days. Keep going${name(', ')}` : 'You can keep this alive even on imperfect days — just finish the Wrap-up.'));
@@ -1102,10 +1104,15 @@ function tile(ico, val, label) {
     h('div', { class: 'tile-val' }, String(val)), h('div', { class: 'tile-label' }, label));
 }
 // Growth-stage artwork for the consistency streak (same tiers as demo-consistency.html)
-function growthIcon(streak) {
-  const tier = streak <= 50 ? 1 : streak <= 100 ? 2 : streak <= 150 ? 3
+// Growth level from a consistency streak — also drives the growth art so the
+// "Level N" label and the plant image always agree.
+function growthTier(streak) {
+  return streak <= 50 ? 1 : streak <= 100 ? 2 : streak <= 150 ? 3
     : streak <= 200 ? 4 : streak <= 250 ? 5 : 6;
-  return `./icons/growth-${tier}.png`;
+}
+const GROWTH_LEVEL_NAMES = ['', 'Seedling', 'Sprout', 'Sapling', 'Young Tree', 'In Bloom', 'Mighty Oak'];
+function growthIcon(streak) {
+  return `./icons/growth-${growthTier(streak)}.png`;
 }
 function growthImg(streak, cls) {
   return h('img', { class: cls, src: growthIcon(streak), alt: '' });

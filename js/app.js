@@ -529,13 +529,8 @@ function renderToday() {
     }
   }
 
-  // Insight tile (data-driven)
-  const ins = M.pickInsight(activeHabits(), state.logsByHabit, today);
-  if (ins) {
-    root.appendChild(h('div', { class: 'insight-tile' },
-      h('span', { class: 'insight-emoji' }, ins.emoji),
-      h('span', { class: 'insight-text' }, ins.text)));
-  }
+  // Insight tile lives only in the Insights tab now (removed here to keep
+  // Today focused on the day's habits).
 
   // FAB intentionally NOT shown on Today — new habits are added only from
   // the Habits tab (cleaner separation of daily-use vs. configuration).

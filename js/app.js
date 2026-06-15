@@ -2805,7 +2805,8 @@ async function openQRScanner(ch) {
   const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
 
   const body = h('div', { class: 'lb-form' });
-  body.appendChild(h('p', { class: 'muted small' }, 'Point your camera at your friend’s Habits QR code.'));
+  body.appendChild(h('p', { class: 'muted small' },
+    `Point your camera at ${ch.friendName || 'your friend'}’s progress QR for “${ch.habitName || 'this habit'}”.`));
   const video = h('video', { playsinline: true, style: { width: '100%', maxHeight: '320px', borderRadius: '8px', background: '#000' } });
   body.appendChild(video);
   const statusDiv = h('div', { class: 'muted small', style: { marginTop: '8px', textAlign: 'center' } }, 'Starting camera…');
@@ -2833,22 +2834,34 @@ async function openQRScanner(ch) {
     await video.play();
     statusDiv.textContent = 'Searching for a QR code…';
 
-    let found = false;
+    // STRICT validation: this scanner is launched from one specific challenge,
+    // so it only accepts a SYNC code for THAT challenge. Invites/acceptances,
+    // codes for a different challenge of mine, or non-Habits QRs are rejected
+    // (with a reason) and scanning continues so the user can aim at the right
+    // one. `busy` prevents overlapping detect() calls; `done` stops after a hit.
+    let busy = false, done = false;
     scanInterval = setInterval(async () => {
-      if (found) return;
+      if (busy || done) return;
+      busy = true;
       try {
         const barcodes = await barcodeDetector.detect(video);
-        if (!barcodes.length) return;
-        found = true;
-        const qrText = barcodes[0].rawValue;
-        // Reuse the same robust pipeline as pasted codes / deep links:
-        // handles a full URL or a bare payload, and any type (invite/accept/sync).
-        const payload = LB.decodePayload(extractPayloadString(qrText));
-        cleanup();
-        closeModal();
-        if (payload) routeLeaderboardPayload(payload);
-        else toast('That QR code is not a Habits code');
+        if (barcodes.length) {
+          const qrText = barcodes[0].rawValue;
+          const payload = LB.decodePayload(extractPayloadString(qrText));
+          const sync = payload ? LB.parseSync(payload) : null;
+          if (!sync) {
+            statusDiv.textContent = 'That isn’t a progress-update code — keep scanning…';
+          } else if (sync.challengeId !== ch.id) {
+            statusDiv.textContent = 'That code is for a different challenge — keep scanning…';
+          } else {
+            done = true;
+            cleanup();
+            closeModal();
+            handleSyncReceive(sync);
+          }
+        }
       } catch (_) { /* transient detect errors between frames — ignore */ }
+      busy = false;
     }, 400);
   } catch (err) {
     statusDiv.textContent = 'Camera access denied or unavailable. Use "I have a code" to paste instead.';
@@ -2859,6 +2872,13 @@ async function openQRScanner(ch) {
 function handleSyncReceive(sync) {
   const ch = findChallenge(sync.challengeId);
   if (!ch) { toast('No matching challenge for this sync link'); return; }
+  // A finished challenge's result is locked (snapshotted at endDate) — a late
+  // sync must not mutate its live numbers. Reject it.
+  if (ch.resultsLocked || ch.status === 'completed') {
+    setView('leaderboard');
+    toast('That challenge has ended — its result is locked');
+    return;
+  }
   // Ignore stale syncs (out-of-order links).
   if (sync.ts && ch.lastSyncedAt && sync.ts < ch.lastSyncedAt) {
     setView('leaderboard');

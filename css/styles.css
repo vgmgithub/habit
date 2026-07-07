@@ -548,6 +548,47 @@ h1, h2, h3, p { margin: 0; }
 .heat-cell.paused { background: transparent; border: 1.5px dashed var(--text-faint); opacity: 0.6; }
 .heat-cell.off { background: var(--heat-empty); opacity: 0.32; }
 
+/* Tracker stats: monthly completion % + week dropdown */
+.tracker-stats {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 24px 16px; margin-top: 16px;
+}
+
+.completion-pct {
+  font-size: 3.5rem; font-weight: 800; letter-spacing: -0.05em;
+  background: linear-gradient(135deg, #10b981 0%, #6ee7b7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.6s ease;
+  line-height: 1;
+}
+
+.completion-pct.animate {
+  animation: pct-pulse 0.6s ease-out;
+}
+
+@keyframes pct-pulse {
+  0% { transform: scale(1.1); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.week-dropdown {
+  font-size: 0.95rem; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--card); color: var(--text);
+  cursor: pointer; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-faint) 50%),
+                    linear-gradient(135deg, var(--text-faint) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 32px;
+}
+
+.week-dropdown:hover { border-color: var(--text-faint); }
+.week-dropdown:focus { outline: none; border-color: var(--accent); }
+
 /* ----- Manage list ----- */
 .manage-list { display: flex; flex-direction: column; gap: 8px; }
 .manage-row {

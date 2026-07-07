@@ -740,6 +740,58 @@ function renderTracker() {
 
   scrollWrap.appendChild(grid);
   root.appendChild(scrollWrap);
+
+  // ---- Completion stats: monthly % + week dropdown ----
+  const today = M.todayStr();
+  const activeHabitIds = new Set(habits.map(h => h.id));
+  const filteredLogs = {};
+  for (const [habitId, logs] of state.logsByHabit) {
+    if (activeHabitIds.has(habitId)) filteredLogs[habitId] = logs;
+  }
+
+  // Build week dropdown options
+  const weeksInMonth = M.getWeeksInMonth(year, monthIdx);
+  const currentWeek = isCurrentMonth ? M.getWeekNumber(today) : null;
+  const weekOptions = {};
+  const monthKey = `${M.MONTH_LABELS[monthIdx]} ${year}`;
+  weekOptions[monthKey] = monthKey; // default: month view
+
+  for (let w = 1; w <= weeksInMonth; w++) {
+    weekOptions[`week-${w}`] = `Week ${w}`;
+  }
+
+  // Track selected view (month or week); default to month
+  let selectedView = monthKey;
+  let currentPct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, today);
+
+  const statsCard = h('div', { class: 'tracker-stats' });
+  const pctDisplay = h('div', { class: 'completion-pct' }, `${currentPct}%`);
+  statsCard.appendChild(pctDisplay);
+
+  // Week dropdown (smaller, no highlight)
+  const weekDropdown = h('select', { class: 'week-dropdown' });
+  Object.entries(weekOptions).forEach(([key, label]) => {
+    const opt = h('option', { value: key }, label);
+    if (key === monthKey) opt.selected = true;
+    weekDropdown.appendChild(opt);
+  });
+
+  weekDropdown.addEventListener('change', () => {
+    selectedView = weekDropdown.value;
+    let pct;
+    if (selectedView === monthKey) {
+      pct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, today);
+    } else {
+      const weekNum = parseInt(selectedView.split('-')[1], 10);
+      pct = M.weekCompletionPct(habits, state.logsByHabit, year, monthIdx, weekNum, today);
+    }
+    pctDisplay.textContent = `${pct}%`;
+    pctDisplay.classList.add('animate');
+    setTimeout(() => pctDisplay.classList.remove('animate'), 600);
+  });
+
+  statsCard.appendChild(weekDropdown);
+  root.appendChild(statsCard);
 }
 
 // Map a log row to the single character that goes inside the tracker cell.

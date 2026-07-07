@@ -610,3 +610,79 @@ export function pickInsight(habits, logsByHabit, today = todayStr()) {
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Tracker stats: week calculations and completion percentages
+// ---------------------------------------------------------------------------
+// Determine which week of the month a date falls into (1-5).
+// Week 1 = days 1-7, Week 2 = days 8-14, etc.
+export function getWeekNumber(dateStr) {
+  const d = parseYmd(dateStr);
+  const day = d.getDate();
+  return Math.floor((day - 1) / 7) + 1;
+}
+
+// Return the number of weeks in a given month (4 or 5).
+export function getWeeksInMonth(year, monthIdx) {
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  return Math.ceil(daysInMonth / 7);
+}
+
+// Calculate completion % for an entire month. Based on ACTIVE habits only.
+// Returns: rounded integer percentage (0-100).
+export function monthCompletionPct(activeHabits, logsByHabit, year, monthIdx, today = todayStr()) {
+  if (!activeHabits.length) return 0;
+
+  let totalScheduled = 0, totalDone = 0;
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+
+  for (const habit of activeHabits) {
+    const logs = logsByHabit.get(habit.id) || [];
+    const lmap = logMap(logs);
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = ymd(new Date(year, monthIdx, d));
+      if (dateStr > today) continue; // only count up to today
+      if (!isScheduled(habit, dateStr)) continue;
+      if (isPausedOn(habit, dateStr)) continue;
+
+      totalScheduled++;
+      const log = lmap.get(dateStr);
+      if (log && log.status === 'done') totalDone++;
+    }
+  }
+
+  if (!totalScheduled) return 0;
+  return Math.round((totalDone / totalScheduled) * 100);
+}
+
+// Calculate completion % for a specific week of a month.
+// weekNum: 1-5, where week N covers days (N-1)*7+1 through N*7.
+export function weekCompletionPct(activeHabits, logsByHabit, year, monthIdx, weekNum, today = todayStr()) {
+  if (!activeHabits.length) return 0;
+
+  const startDay = (weekNum - 1) * 7 + 1;
+  const endDay = weekNum * 7;
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+
+  let totalScheduled = 0, totalDone = 0;
+
+  for (const habit of activeHabits) {
+    const logs = logsByHabit.get(habit.id) || [];
+    const lmap = logMap(logs);
+
+    for (let d = startDay; d <= Math.min(endDay, daysInMonth); d++) {
+      const dateStr = ymd(new Date(year, monthIdx, d));
+      if (dateStr > today) continue;
+      if (!isScheduled(habit, dateStr)) continue;
+      if (isPausedOn(habit, dateStr)) continue;
+
+      totalScheduled++;
+      const log = lmap.get(dateStr);
+      if (log && log.status === 'done') totalDone++;
+    }
+  }
+
+  if (!totalScheduled) return 0;
+  return Math.round((totalDone / totalScheduled) * 100);
+}

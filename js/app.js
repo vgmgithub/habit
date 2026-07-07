@@ -236,6 +236,8 @@ async function setLog(habitId, date, status, note = '') {
   const idx = arr.findIndex((l) => l.id === id);
   if (idx >= 0) arr[idx] = row; else arr.push(row);
   state.logsByHabit.set(habitId, arr);
+  // Auto-backup in the background when a habit is marked done
+  if (status === 'done') triggerAutoBackup();
 }
 
 function getLog(habitId, date) {
@@ -1877,6 +1879,23 @@ async function buildBackupData() {
     challenges: await db.getAll('challenges'),
     friendLinks: await db.getAll('friendLinks'),
   };
+}
+
+// Background auto-backup — triggers silently when a habit is marked done.
+// Does not block the UI or show any feedback (fire-and-forget).
+async function triggerAutoBackup() {
+  try {
+    const folder = await BK.getSavedFolder();
+    if (!folder) return; // No backup folder configured
+    if (!(await BK.ensureFolderPermission(folder))) return; // Permission not granted
+    const data = await buildBackupData();
+    await BK.writeBackup(folder, data);
+    await BK.rotateBackups(folder, BACKUP_KEEP);
+    const date = M.todayStr();
+    await setSetting('lastBackupAt', date);
+  } catch (_) {
+    // Silently ignore — don't disrupt the user's workflow if backup fails
+  }
 }
 
 // REPLACE all data with `data`. Preserves this device's PIN and the saved backup

@@ -742,16 +742,12 @@ function renderTracker() {
   root.appendChild(scrollWrap);
 
   // ---- Completion stats: monthly % + week dropdown ----
-  const today = M.todayStr();
+  const todayStr = M.todayStr();
   const activeHabitIds = new Set(habits.map(h => h.id));
-  const filteredLogs = {};
-  for (const [habitId, logs] of state.logsByHabit) {
-    if (activeHabitIds.has(habitId)) filteredLogs[habitId] = logs;
-  }
 
   // Build week dropdown options
   const weeksInMonth = M.getWeeksInMonth(year, monthIdx);
-  const currentWeek = isCurrentMonth ? M.getWeekNumber(today) : null;
+  const currentWeek = isCurrentMonth ? M.getWeekNumber(todayStr) : null;
   const weekOptions = {};
   const monthKey = `${M.MONTH_LABELS[monthIdx]} ${year}`;
   weekOptions[monthKey] = monthKey; // default: month view
@@ -762,7 +758,7 @@ function renderTracker() {
 
   // Track selected view (month or week); default to month
   let selectedView = monthKey;
-  let currentPct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, today);
+  let currentPct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, todayStr);
 
   const statsCard = h('div', { class: 'tracker-stats' });
   const pctDisplay = h('div', { class: 'completion-pct' }, `${currentPct}%`);
@@ -780,10 +776,10 @@ function renderTracker() {
     selectedView = weekDropdown.value;
     let pct;
     if (selectedView === monthKey) {
-      pct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, today);
+      pct = M.monthCompletionPct(habits, state.logsByHabit, year, monthIdx, todayStr);
     } else {
       const weekNum = parseInt(selectedView.split('-')[1], 10);
-      pct = M.weekCompletionPct(habits, state.logsByHabit, year, monthIdx, weekNum, today);
+      pct = M.weekCompletionPct(habits, state.logsByHabit, year, monthIdx, weekNum, todayStr);
     }
     pctDisplay.textContent = `${pct}%`;
     pctDisplay.classList.add('animate');

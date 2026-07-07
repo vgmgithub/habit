@@ -3,7 +3,7 @@
 // network fallback that refreshes the cache. All habit DATA lives in IndexedDB
 // (handled by the page), so the SW only needs to cache the static shell.
 
-const CACHE = 'habits-v59';
+const CACHE = 'habits-v60';
 const ASSETS = [
   './',
   './index.html',
@@ -38,8 +38,17 @@ self.addEventListener('install', (e) => {
   // which froze installed PWAs on stale JS — the cause of "works in the browser
   // / incognito but not in the PWA".)
   self.skipWaiting();
+  // Use {cache:'reload'} instead of plain c.addAll() — addAll() fetches with
+  // default HTTP-cache semantics, so a stale disk-cached copy of app.js/
+  // styles.css can get baked into the BRAND NEW cache, making "update
+  // available" apply but show no actual changes. 'reload' forces a real
+  // network round-trip for every precached asset.
   e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(ASSETS))
+    caches.open(CACHE).then((c) =>
+      Promise.all(ASSETS.map((url) =>
+        fetch(url, { cache: 'reload' }).then((res) => c.put(url, res))
+      ))
+    )
   );
 });
 
@@ -56,7 +65,10 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
     caches.match(req).then((cached) => {
-      const network = fetch(req)
+      // 'reload' bypasses the browser's HTTP disk cache so this background
+      // revalidation can't re-poison the SW cache with a stale asset (the
+      // same staleness bug as the install handler above, but on every fetch).
+      const network = fetch(req, { cache: 'reload' })
         .then((res) => {
           if (res && res.status === 200 && res.type === 'basic') {
             const copy = res.clone();
